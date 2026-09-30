@@ -1,0 +1,157 @@
+from __future__ import annotations
+import hashlib,json,threading,time
+from collections import defaultdict
+from app.models import Source, InspectionOutput, ASSET_HEADERS, RECORD_HEADERS
+from app.commit import CommitService
+
+TERMINAL={'Committed - Validated','Blocked - Human Review'}
+class Orchestrator:
+    def __init__(self,sheets,drive,inspector,settings):
+        self.sheets=sheets;self.drive=drive;self.inspector=inspector;self.settings=settings
+        self.committer=CommitService(sheets);self.threads={};self.lock=threading.RLock()
+    def _queue(self,sid,job):
+        rows=[r for r in self.sheets.rows(sid,'Batch Queue') if r.get('Job ID')==job]
+        for r in rows:
+            try:r['_manifest']=json.loads(r.get('Notes') or '{}')['manifest']
+            except (KeyError,ValueError):raise ValueError('Invalid immutable manifest in Batch Queue')
+        return rows
+    def _find(self,job):
+        # Spreadsheet ID is encoded in the signed job locator row: process memory is never authoritative.
+        # The API supplies a separate locator sheet via configuration for restart discovery.
+        for sid in self.sheets.rows(self.settings.job_index_spreadsheet_id,'HistoryIT Jobs'):
+            if sid['Job ID']==job:return sid['Spreadsheet ID']
+        raise KeyError(job)
+    def _job(self,job):
+        sid=self._find(job);rows=self._queue(sid,job)
+        if not rows:raise KeyError(job)
+        return sid,rows
+    def create(self,req):
+        self.sheets.ensure_tab(self.settings.job_index_spreadsheet_id,'HistoryIT Jobs',['Job ID','Spreadsheet ID','Project','Source Folder ID'])
+        self.sheets.ensure_tab(req.spreadsheet_id,'OpenAI Usage',['Call ID','Project','Job ID','Batch ID','Model','Source Image Count','Input Tokens','Cached Input Tokens','Output Tokens','Estimated Cost USD','Attempt','Elapsed Seconds','Status','Cumulative Job Cost USD','Response ID'])
+        sources=self.drive.enumerate(req.source_folder_id)
+        if not sources:raise ValueError('Authorized folder contains no images')
+        existing={r.get('Digital Asset') for r in self.sheets.rows(req.spreadsheet_id,'Asset QC')}
+        if existing & {s.name for s in sources}:raise ValueError('Authorized sources already exist in Asset QC')
+        folders=defaultdict(list)
+        for s in sources:folders[s.folder_id].append(s)
+        size=req.batch_size or self.settings.batch_size
+        digest=hashlib.sha256((req.spreadsheet_id+'|'+req.source_folder_id+'|'+req.project).encode()).hexdigest()[:16]
+        job='HIT-'+digest
+        if any(r.get('Job ID')==job for r in self.sheets.rows(req.spreadsheet_id,'Batch Queue')):raise ValueError('Job already initialized; resume existing job')
+        # Register is authoritative; the index only resolves opaque IDs to sheet IDs.
+        self.sheets.write(self.settings.job_index_spreadsheet_id,'HistoryIT Jobs',{'Job ID':job,'Spreadsheet ID':req.spreadsheet_id,'Project':req.project,'Source Folder ID':req.source_folder_id},('Job ID',job))
+        seq=0
+        for fid,group in folders.items():
+            for start in range(0,len(group),size):
+                chunk=group[start:start+size];seq+=1;bid=f'{job}-B{seq:04d}'
+                payload={'manifest':[x.model_dump() for x in chunk], 'folder_id':fid}
+                note=json.dumps(payload,separators=(',',':'))
+                if len(note)>45000:raise ValueError('Batch manifest exceeds one Sheet cell; lower BATCH_SIZE')
+                self.sheets.write(req.spreadsheet_id,'Batch Queue',{'Project':req.project,'Job ID':job,'Batch ID':bid,'Box':req.box,'Source Group / Folder':chunk[0].folder_name,'Source Folder URL':'https://drive.google.com/drive/folders/'+fid,'Start Filename':chunk[0].name,'End Filename':chunk[-1].name,'Planned Asset Count':str(len(chunk)),'Batch Status':'Authorized / Pending Inspection','Prior Open Item':'None','Resulting Open Item':'None','Inspection Attempt':'0','Commit Attempt':'0','Validation Status':'Not Run','Error / Retry Note':'','Next Batch Start':'','Notes':note,'Staging Schema':'Lean Split v2'})
+        return self.state(job)
+    def state(self,job):
+        sid,rows=self._job(job)
+        pending=next((r for r in rows if r['Batch Status']!='Committed - Validated'),None)
+        return {'job_id':job,'project':rows[0]['Project'],'spreadsheet_id':sid,'source_folder_id':'','batches':len(rows),'status':'Paused' if any(r['Batch Status']=='Paused' for r in rows) else ('Completed - Validated' if pending is None else pending['Batch Status']),'next_batch':pending['Batch ID'] if pending else None}
+    def start(self,job):
+        with self.lock:
+            thread=self.threads.get(job)
+            if thread and thread.is_alive():return self.state(job)
+            t=threading.Thread(target=self.run,args=(job,),daemon=True,name='historyit-'+job)
+            self.threads[job]=t;t.start()
+        return self.state(job)
+    def pause(self,job):
+        sid,rows=self._job(job)
+        for row in rows:
+            if row['Batch Status'] in ('Authorized / Pending Inspection','Inspection Failed - Retryable'):
+                self.sheets.write(sid,'Batch Queue',{'Batch Status':'Paused'},('Batch ID',row['Batch ID']))
+        return self.state(job)
+    def resume(self,job):
+        sid,rows=self._job(job)
+        for row in rows:
+            if row['Batch Status']=='Paused':self.sheets.write(sid,'Batch Queue',{'Batch Status':'Authorized / Pending Inspection'},('Batch ID',row['Batch ID']))
+        return self.start(job)
+    def retry(self,bid):
+        for jobrow in self.sheets.rows(self.settings.job_index_spreadsheet_id,'HistoryIT Jobs'):
+            sid=jobrow['Spreadsheet ID']
+            matches=[r for r in self.sheets.rows(sid,'Batch Queue') if r['Batch ID']==bid]
+            if matches:
+                r=matches[0]
+                if r['Batch Status'] not in ('Inspection Failed - Retryable','Commit Failed - Retryable','Blocked - Human Review'):
+                    raise ValueError('Batch not retryable')
+                self.sheets.write(sid,'Batch Queue',{'Batch Status':'Inspection Complete - Awaiting Commit' if self._complete(sid,r) else 'Authorized / Pending Inspection','Validation Status':'Not Run','Error / Retry Note':''},('Batch ID',bid))
+                return self.start(r['Job ID'])
+        raise KeyError(bid)
+    def _complete(self,sid,b):
+        rows=[r for r in self.sheets.rows(sid,'Asset Staging') if r['Batch ID']==b['Batch ID']]
+        expected=json.loads(b['Notes'])['manifest']
+        return len(rows)==len(expected) and {r['Digital Asset'] for r in rows}=={s['name'] for s in expected} and all(r['Inspection Complete']=='Yes' for r in rows)
+    def _usage(self,sid,job):
+        return [r for r in self.sheets.rows(sid,'OpenAI Usage') if r['Job ID']==job]
+    def cost(self,sid,job):return sum(float(r.get('Estimated Cost USD') or 0) for r in self._usage(sid,job))
+    def _record_usage(self,sid,job,b,attempt,info,success):
+        cached=int(info.get('cached_input_tokens',0));inp=int(info.get('input_tokens',0));out=int(info.get('output_tokens',0))
+        s=self.settings;cost=((inp-cached)*s.openai_input_usd_per_million+cached*s.openai_cached_input_usd_per_million+out*s.openai_output_usd_per_million)/1e6
+        total=self.cost(sid,job)+cost
+        self.sheets.write(sid,'OpenAI Usage',{'Call ID':f'{b["Batch ID"]}-A{attempt:02d}','Project':b['Project'],'Job ID':job,'Batch ID':b['Batch ID'],'Model':s.openai_model,'Source Image Count':b['Planned Asset Count'],'Input Tokens':str(inp),'Cached Input Tokens':str(cached),'Output Tokens':str(out),'Estimated Cost USD':str(cost),'Attempt':str(attempt),'Elapsed Seconds':str(info.get('elapsed_seconds',0)),'Status':'Success' if success else 'Failure','Cumulative Job Cost USD':str(total),'Response ID':info.get('response_id','')},('Call ID',f'{b["Batch ID"]}-A{attempt:02d}'))
+    def _stage(self,sid,b,output):
+        expected=[x['name'] for x in json.loads(b['Notes'])['manifest']]
+        assets=[a.model_dump(by_alias=True) for a in output.assets];records=[r.model_dump(by_alias=True) for r in output.records]
+        if [a['Digital Asset'] for a in assets]!=expected:raise ValueError('Staging filename/order mismatch')
+        for collection,headers,name,key in [(assets,ASSET_HEADERS,'Asset Staging','Digital Asset'),(records,RECORD_HEADERS,'Record Staging','Proposed Record ID')]:
+            if len({r[key] for r in collection})!=len(collection):raise ValueError('Duplicate staging key')
+            for r in collection:
+                if r['Batch ID']!=b['Batch ID'] or r['Job ID']!=b['Job ID'] or r['Project']!=b['Project'] or r['Inspection Complete']!='Yes' or r['Commit Status']!='Pending Commit':raise ValueError('Invalid staging identity/status')
+                self.sheets.write(sid,name,r,(key,r[key]))
+        if not self._complete(sid,b):raise ValueError('Staging readback mismatch')
+    def run(self,job):
+        sid,rows=self._job(job)
+        for b in rows:
+            b=next(r for r in self._queue(sid,job) if r['Batch ID']==b['Batch ID'])
+            status=b['Batch Status']
+            if status=='Committed - Validated':self.committer.validate(sid,b,already=True);continue
+            if status in ('Paused','Blocked - Human Review'):return
+            if status in ('Inspection In Progress','Inspection Failed - Retryable'):
+                if self._complete(sid,b):status='Inspection Complete - Awaiting Commit'
+                else:status='Authorized / Pending Inspection'
+            if status=='Authorized / Pending Inspection':
+                if self.cost(sid,job)>=self.settings.job_spending_limit_usd:
+                    self.sheets.write(sid,'Batch Queue',{'Batch Status':'Blocked - Human Review','Error / Retry Note':'Job spending limit reached'},('Batch ID',b['Batch ID']));return
+                attempt=int(float(b.get('Inspection Attempt') or 0))+1
+                if attempt>self.settings.max_retries:
+                    self.sheets.write(sid,'Batch Queue',{'Batch Status':'Blocked - Human Review','Error / Retry Note':'Inspection retry limit reached'},('Batch ID',b['Batch ID']));return
+                self.sheets.write(sid,'Batch Queue',{'Batch Status':'Inspection In Progress','Inspection Attempt':str(attempt)},('Batch ID',b['Batch ID']))
+                prior=self.sheets.field(sid,'Open Intellectual Item')
+                sources=[Source.model_validate(s) for s in b['_manifest']]
+                rules=self.sheets.rows(sid,'Rules')+self.sheets.rows(sid,'Project Classification Rules')
+                try:
+                    output,usage=self.inspector.inspect(job,b['Batch ID'],sources,{'prior_open_item':prior,'continuation':self.sheets.rows(sid,'Continuation State'),'existing_open_record':[r for r in self.sheets.rows(sid,'Itemization') if r['Item ID']==prior]},rules)
+                    self._stage(sid,b,output)
+                    self._record_usage(sid,job,b,attempt,usage,True)
+                    self.sheets.write(sid,'Batch Queue',{'Batch Status':'Inspection Complete - Awaiting Commit','Prior Open Item':prior,'Inspection Date':time.strftime('%Y-%m-%d')},('Batch ID',b['Batch ID']))
+                except Exception as exc:
+                    # Ambiguous failure: a complete readback is eligible for commit on resume.
+                    self._record_usage(sid,job,b,attempt,{'elapsed_seconds':getattr(exc,'elapsed_seconds',0)},False)
+                    self.sheets.write(sid,'Batch Queue',{'Batch Status':'Inspection Failed - Retryable','Error / Retry Note':str(exc)[:300]},('Batch ID',b['Batch ID']))
+                    return
+            try:
+                b=next(r for r in self._queue(sid,job) if r['Batch ID']==b['Batch ID'])
+                self.committer.commit(sid,b)
+            except Exception as exc:
+                latest=next(r for r in self._queue(sid,job) if r['Batch ID']==b['Batch ID'])
+                if latest['Batch Status']!='Blocked - Human Review':
+                    # Preserve Pending Validation when writes might have reached Sheets.
+                    if latest['Batch Status']!='Commit Written - Pending Validation':
+                        self.sheets.write(sid,'Batch Queue',{'Batch Status':'Commit Failed - Retryable','Error / Retry Note':str(exc)[:300]},('Batch ID',b['Batch ID']))
+                return
+        self._close_folders(sid,job)
+    def _close_folders(self,sid,job):
+        groups=defaultdict(list)
+        for b in self._queue(sid,job):groups[b['Source Group / Folder']].append(b)
+        for folder,bs in groups.items():
+            names=[s['name'] for b in bs for s in b['_manifest']]
+            qc=[r for r in self.sheets.rows(sid,'Asset QC') if r['Digital Asset'] in names]
+            if all(b['Batch Status']=='Committed - Validated' for b in bs) and len(qc)==len(names) and {r['Digital Asset'] for r in qc}==set(names) and bs[-1]['Resulting Open Item']=='None':
+                for r in self.sheets.rows(sid,'Folder Processing Unit Summary'):
+                    if r['Source Group / Folder']==folder and r.get('Notes','').startswith(job):
+                        self.sheets.write(sid,'Folder Processing Unit Summary',{'Processing Status':'Completed - Validated','Completed Date':time.strftime('%Y-%m-%d')},('Processing Unit / Source Folder',r['Processing Unit / Source Folder']))
