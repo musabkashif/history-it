@@ -1,6 +1,7 @@
 from __future__ import annotations
 import base64, json, time
 from pathlib import Path
+from app.credits import as_credit_error
 from app.models import InspectionOutput
 
 class Inspector:
@@ -39,4 +40,7 @@ class Inspector:
         except Exception as e:
             # API failures can be ambiguous. Caller checks staging before another attempt.
             setattr(e,'elapsed_seconds',round(time.monotonic()-start,2))
+            credit = as_credit_error(e)
+            if credit is not e:
+                raise credit from e
             raise

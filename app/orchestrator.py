@@ -3,6 +3,7 @@ import hashlib,json,threading,time
 from collections import defaultdict
 from app.models import Source, InspectionOutput, ASSET_HEADERS, RECORD_HEADERS
 from app.commit import CommitService
+from app.credits import CreditShortageError, credit_alert
 
 TERMINAL={'Committed - Validated','Blocked - Human Review'}
 class Orchestrator:
@@ -52,7 +53,18 @@ class Orchestrator:
     def state(self,job):
         sid,rows=self._job(job)
         pending=next((r for r in rows if r['Batch Status']!='Committed - Validated'),None)
-        return {'job_id':job,'project':rows[0]['Project'],'spreadsheet_id':sid,'source_folder_id':'','batches':len(rows),'status':'Paused' if any(r['Batch Status']=='Paused' for r in rows) else ('Completed - Validated' if pending is None else pending['Batch Status']),'next_batch':pending['Batch ID'] if pending else None}
+        return {'job_id':job,'project':rows[0]['Project'],'spreadsheet_id':sid,'source_folder_id':'','batches':len(rows),'status':'Paused' if any(r['Batch Status']=='Paused' for r in rows) else ('Completed - Validated' if pending is None else pending['Batch Status']),'next_batch':pending['Batch ID'] if pending else None,'alert':self.alert(rows)}
+    def alert(self,rows):
+        for row in rows:
+            note=(row.get('Error / Retry Note') or '').strip()
+            if row.get('Batch Status')=='Blocked - Human Review' and note.startswith('OpenAI account is out of credits.'):
+                return note
+        pending=next((r for r in rows if r['Batch Status']!='Committed - Validated'),None)
+        if pending and pending['Batch Status']=='Blocked - Human Review':
+            return (pending.get('Error / Retry Note') or '').strip() or None
+        return None
+    def _credit_blocked(self,row):
+        return row.get('Batch Status')=='Blocked - Human Review' and str(row.get('Error / Retry Note') or '').startswith('OpenAI account is out of credits.')
     def start(self,job):
         with self.lock:
             thread=self.threads.get(job)
@@ -69,7 +81,10 @@ class Orchestrator:
     def resume(self,job):
         sid,rows=self._job(job)
         for row in rows:
-            if row['Batch Status']=='Paused':self.sheets.write(sid,'Batch Queue',{'Batch Status':'Authorized / Pending Inspection'},('Batch ID',row['Batch ID']))
+            if self._credit_blocked(row):
+                self.sheets.write(sid,'Batch Queue',{'Batch Status':'Authorized / Pending Inspection','Error / Retry Note':''},('Batch ID',row['Batch ID']))
+            elif row['Batch Status']=='Paused':
+                self.sheets.write(sid,'Batch Queue',{'Batch Status':'Authorized / Pending Inspection'},('Batch ID',row['Batch ID']))
         return self.start(job)
     def retry(self,bid):
         for jobrow in self.sheets.rows(self.settings.job_index_spreadsheet_id,'HistoryIT Jobs'):
@@ -89,11 +104,12 @@ class Orchestrator:
     def _usage(self,sid,job):
         return [r for r in self.sheets.rows(sid,'OpenAI Usage') if r['Job ID']==job]
     def cost(self,sid,job):return sum(float(r.get('Estimated Cost USD') or 0) for r in self._usage(sid,job))
-    def _record_usage(self,sid,job,b,attempt,info,success):
+    def _record_usage(self,sid,job,b,attempt,info,success,status=None):
         cached=int(info.get('cached_input_tokens',0));inp=int(info.get('input_tokens',0));out=int(info.get('output_tokens',0))
         s=self.settings;cost=((inp-cached)*s.openai_input_usd_per_million+cached*s.openai_cached_input_usd_per_million+out*s.openai_output_usd_per_million)/1e6
         total=self.cost(sid,job)+cost
-        self.sheets.write(sid,'OpenAI Usage',{'Call ID':f'{b["Batch ID"]}-A{attempt:02d}','Project':b['Project'],'Job ID':job,'Batch ID':b['Batch ID'],'Model':s.openai_model,'Source Image Count':b['Planned Asset Count'],'Input Tokens':str(inp),'Cached Input Tokens':str(cached),'Output Tokens':str(out),'Estimated Cost USD':str(cost),'Attempt':str(attempt),'Elapsed Seconds':str(info.get('elapsed_seconds',0)),'Status':'Success' if success else 'Failure','Cumulative Job Cost USD':str(total),'Response ID':info.get('response_id','')},('Call ID',f'{b["Batch ID"]}-A{attempt:02d}'))
+        call_id=info.get('call_id') or f'{b["Batch ID"]}-A{attempt:02d}'
+        self.sheets.write(sid,'OpenAI Usage',{'Call ID':call_id,'Project':b['Project'],'Job ID':job,'Batch ID':b['Batch ID'],'Model':s.openai_model,'Source Image Count':b['Planned Asset Count'],'Input Tokens':str(inp),'Cached Input Tokens':str(cached),'Output Tokens':str(out),'Estimated Cost USD':str(cost),'Attempt':str(attempt),'Elapsed Seconds':str(info.get('elapsed_seconds',0)),'Status':status or ('Success' if success else 'Failure'),'Cumulative Job Cost USD':str(total),'Response ID':info.get('response_id','')},('Call ID',call_id))
     def _stage(self,sid,b,output):
         expected=[x['name'] for x in json.loads(b['Notes'])['manifest']]
         assets=[a.model_dump(by_alias=True) for a in output.assets];records=[r.model_dump(by_alias=True) for r in output.records]
@@ -121,17 +137,27 @@ class Orchestrator:
                 if attempt>self.settings.max_retries:
                     self.sheets.write(sid,'Batch Queue',{'Batch Status':'Blocked - Human Review','Error / Retry Note':'Inspection retry limit reached'},('Batch ID',b['Batch ID']));return
                 self.sheets.write(sid,'Batch Queue',{'Batch Status':'Inspection In Progress','Inspection Attempt':str(attempt)},('Batch ID',b['Batch ID']))
-                prior=self.sheets.field(sid,'Open Intellectual Item')
-                sources=[Source.model_validate(s) for s in b['_manifest']]
-                rules=self.sheets.rows(sid,'Rules')+self.sheets.rows(sid,'Project Classification Rules')
                 try:
+                    prior=self.sheets.field(sid,'Open Intellectual Item')
+                    sources=[Source.model_validate(s) for s in b['_manifest']]
+                    rules=self.sheets.rows(sid,'Rules')+self.sheets.rows(sid,'Project Classification Rules')
                     output,usage=self.inspector.inspect(job,b['Batch ID'],sources,{'prior_open_item':prior,'continuation':self.sheets.rows(sid,'Continuation State'),'existing_open_record':[r for r in self.sheets.rows(sid,'Itemization') if r['Item ID']==prior]},rules)
                     self._stage(sid,b,output)
                     self._record_usage(sid,job,b,attempt,usage,True)
                     self.sheets.write(sid,'Batch Queue',{'Batch Status':'Inspection Complete - Awaiting Commit','Prior Open Item':prior,'Inspection Date':time.strftime('%Y-%m-%d')},('Batch ID',b['Batch ID']))
+                except CreditShortageError as exc:
+                    self.sheets.write(sid,'Batch Queue',{'Batch Status':'Blocked - Human Review','Inspection Attempt':str(max(attempt-1,0)),'Error / Retry Note':credit_alert(job)},('Batch ID',b['Batch ID']))
+                    try:
+                        self._record_usage(sid,job,b,attempt,{'elapsed_seconds':getattr(exc,'elapsed_seconds',0),'call_id':f'{b["Batch ID"]}-CREDIT-{time.time_ns()}'},False,'Blocked - OpenAI Credits')
+                    except Exception:
+                        pass
+                    return
                 except Exception as exc:
                     # Ambiguous failure: a complete readback is eligible for commit on resume.
-                    self._record_usage(sid,job,b,attempt,{'elapsed_seconds':getattr(exc,'elapsed_seconds',0)},False)
+                    try:
+                        self._record_usage(sid,job,b,attempt,{'elapsed_seconds':getattr(exc,'elapsed_seconds',0)},False)
+                    except Exception:
+                        pass
                     self.sheets.write(sid,'Batch Queue',{'Batch Status':'Inspection Failed - Retryable','Error / Retry Note':str(exc)[:300]},('Batch ID',b['Batch ID']))
                     return
             try:

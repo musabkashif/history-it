@@ -1,16 +1,27 @@
 """Live integrations. Source reader and register writer are kept separate."""
 from __future__ import annotations
 from typing import Any
-import io
+import io, threading
 
 IMAGE_MIME = {'image/jpeg','image/png','image/tiff','image/webp'}
+
+def _google_api(name, version, creds, timeout):
+    import httplib2
+    from google_auth_httplib2 import AuthorizedHttp
+    from googleapiclient.discovery import build
+    http = AuthorizedHttp(creds, http=httplib2.Http(timeout=timeout))
+    return build(name, version, http=http, cache_discovery=False)
 
 class Drive:
     def __init__(self, credentials=None):
         from google.auth import default
-        from googleapiclient.discovery import build
         creds = credentials or default(scopes=['https://www.googleapis.com/auth/drive.readonly'])[0]
-        self.api = build('drive','v3',credentials=creds,cache_discovery=False)
+        self.api = _google_api('drive', 'v3', creds, 300)
+        self._lock = threading.RLock()
+
+    def _execute(self, request):
+        with self._lock:
+            return request.execute()
 
     def enumerate(self, root: str):
         from app.models import Source
@@ -22,7 +33,7 @@ class Drive:
             token = None
             children = []
             while True:
-                response = self.api.files().list(q=f"'{fid}' in parents and trashed = false", fields='nextPageToken,files(id,name,mimeType)',pageSize=1000,pageToken=token,supportsAllDrives=True,includeItemsFromAllDrives=True).execute()
+                response = self._execute(self.api.files().list(q=f"'{fid}' in parents and trashed = false", fields='nextPageToken,files(id,name,mimeType)',pageSize=1000,pageToken=token,supportsAllDrives=True,includeItemsFromAllDrives=True))
                 children.extend(response.get('files',[]))
                 token = response.get('nextPageToken')
                 if not token: break
@@ -36,24 +47,28 @@ class Drive:
 
     def image(self, source):
         # Only called by inspection. Never injected into the commit service.
-        return self.api.files().get_media(fileId=source.id,supportsAllDrives=True).execute()
+        return self._execute(self.api.files().get_media(fileId=source.id,supportsAllDrives=True))
 
 class Sheets:
     def __init__(self, credentials=None):
         from google.auth import default
-        from googleapiclient.discovery import build
         creds=credentials or default(scopes=['https://www.googleapis.com/auth/spreadsheets'])[0]
-        self.api=build('sheets','v4',credentials=creds,cache_discovery=False).spreadsheets()
+        self.api=_google_api('sheets','v4',creds,180).spreadsheets()
         self._headers={}
+        self._lock=threading.RLock()
+
+    def _execute(self, request):
+        with self._lock:
+            return request.execute()
 
     def _values(self,sid,range_):
-        return self.api.values().get(spreadsheetId=sid,range=range_,valueRenderOption='UNFORMATTED_VALUE').execute().get('values',[])
+        return self._execute(self.api.values().get(spreadsheetId=sid,range=range_,valueRenderOption='UNFORMATTED_VALUE')).get('values',[])
 
     def headers(self,sid,sheet):
         k=(sid,sheet)
         if k not in self._headers:
             rows=self._values(sid,f"'{sheet}'!1:12")
-            found=next(((i+1,{str(v):j for j,v in enumerate(row) if v}) for i,row in enumerate(rows) if len(row)>1 and ('Project' in row or 'Check ID' in row or 'State Field' in row)),None)
+            found=next(((i+1,{str(v):j for j,v in enumerate(row) if v}) for i,row in enumerate(rows) if len(row)>1 and ('Project' in row or 'Check ID' in row or 'State Field' in row or 'Rule ID' in row)),None)
             if not found: raise ValueError(f'Header row not found: {sheet}')
             self._headers[k]=found
         return self._headers[k]
@@ -68,9 +83,19 @@ class Sheets:
         return out
 
     def _put(self,sid,range_,values):
-        self.api.values().update(spreadsheetId=sid,range=range_,valueInputOption='RAW',body={'values':values}).execute()
+        self._execute(self.api.values().update(spreadsheetId=sid,range=range_,valueInputOption='RAW',body={'values':values}))
         actual=self._values(sid,range_)
-        if [[str(v) for v in r] for r in actual]!=[[str(v) for v in r] for r in values]:
+        width=max((len(r) for r in values), default=0)
+        def norm(rows):
+            out=[]
+            for r in rows:
+                cells=[str(v) for v in r]+['']*width
+                out.append(cells[:width])
+            while len(out)<len(values):
+                out.append(['']*width)
+            return out
+        # Sheets omits trailing empty cells, so a blank Response ID must still match.
+        if norm(actual)!=norm(values):
             raise RuntimeError(f'Readback failed for {range_}')
 
     @staticmethod
@@ -99,9 +124,9 @@ class Sheets:
         return target
 
     def ensure_tab(self,sid,name,headers):
-        meta=self.api.get(spreadsheetId=sid,fields='sheets.properties.title').execute()
+        meta=self._execute(self.api.get(spreadsheetId=sid,fields='sheets.properties.title'))
         if name not in {x['properties']['title'] for x in meta['sheets']}:
-            self.api.batchUpdate(spreadsheetId=sid,body={'requests':[{'addSheet':{'properties':{'title':name}}}]}).execute()
+            self._execute(self.api.batchUpdate(spreadsheetId=sid,body={'requests':[{'addSheet':{'properties':{'title':name}}}]}))
             self._put(sid,f"'{name}'!A1:{self.col(len(headers)-1)}1",[list(headers)])
         self._headers.pop((sid,name),None)
 

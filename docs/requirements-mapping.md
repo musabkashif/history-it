@@ -11,6 +11,7 @@
 | Recovery/idempotency | pending-validation recovery, upsert conflict detection, committed no-op | Real register crash simulation required |
 | Continuation state | summary/checkpoint writes in `_summaries` | Open item carried by register field |
 | Usage/cost/limits | `OpenAI Usage` writes and settings | Requires live/mocked API response |
+| OpenAI credit shortage stop and alert | `app/credits.py`, `Inspector`, `Orchestrator.run` / `resume`; `alert` on job, batches, and usage | `tests/test_credits.py` |
 | REST API | `app/main.py` | OpenAPI available at `/docs` |
 | Benchmark comparison | `/api/benchmark/compare` read-only key diff | Requires both register IDs |
 | Frozen benchmark | only read in compare endpoint | No benchmark write path |

@@ -97,6 +97,7 @@ class JobState(BaseModel):
     batches: int
     status: str
     next_batch: str | None = None
+    alert: str | None = None
 
 class BenchmarkRequest(BaseModel):
     spreadsheet_id: str

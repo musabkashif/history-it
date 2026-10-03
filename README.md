@@ -33,6 +33,8 @@ curl -X POST http://localhost:8000/api/benchmark/compare -H 'Content-Type: appli
 
 Restart the API and call `/start` again. Batch Queue and staging are checked before another inspection call. `Committed - Validated` is a verified no-op. `Commit Written - Pending Validation` replays deterministic expected rows, rejects conflicts, and validates readback. Use `/api/batches/{batch_id}/retry` only for retryable/blocked batches after reviewing the recorded error.
 
+If the OpenAI account is out of credits, the current batch becomes `Blocked - Human Review` and later batches are not sent. Completed batches stay as they are. This does not count against `MAX_RETRIES`. `GET /api/jobs/{job_id}`, `/batches`, and `/usage` return `alert` with the reason and the resume instruction. Add credits, then call `POST /api/jobs/{job_id}/resume`. A normal rate limit stays `Inspection Failed - Retryable`.
+
 ## Current limits
 
 The uploaded packet does not contain the four governing DOCX references or zipped developer reference named by the client, so live OpenAI inspection is intentionally blocked until they are supplied. Google Sheets tab creation for the auxiliary `HistoryIT Jobs` and `OpenAI Usage` tabs should be performed before the first live job (or enabled in the adapter). Real Box 19/Box 30 runs still require client credentials and acceptance review.
