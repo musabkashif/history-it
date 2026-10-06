@@ -9,6 +9,8 @@ from app.adapters import Drive, Sheets
 from app.inspection import Inspector
 from app.orchestrator import Orchestrator
 
+DIAGNOSTICS_BUILD='2026-10-06-1'
+
 settings=Settings()
 app=FastAPI(title='HistoryIT Archive Itemization Automation MVP',version='0.1.0')
 _runtime=None
@@ -52,7 +54,7 @@ def google_error(_request:Request,exc:HttpError):
  return JSONResponse(status_code=err.status_code,content={'detail':err.detail})
 
 @app.get('/health')
-def health():return {'status':'ok','service':'historyit-archive-mvp','configured':bool(settings.openai_model and settings.google_application_credentials)}
+def health():return {'status':'ok','service':'historyit-archive-mvp','configured':bool(settings.openai_model and settings.google_application_credentials),'diagnostics_build':DIAGNOSTICS_BUILD,'diagnostics_dir':str(__import__('pathlib').Path(settings.diagnostics_dir).resolve())}
 
 @app.post('/api/jobs',response_model=JobState)
 def create(req:JobCreate,x_api_token:str|None=Header(default=None)):
@@ -80,15 +82,39 @@ def validate(job_id:str,x_api_token:str|None=Header(default=None)):
 @app.get('/api/jobs/{job_id}/validation')
 def validations(job_id:str,x_api_token:str|None=Header(default=None)):
  guard(x_api_token);o=live();sid,rows=call(o._job,job_id);return {'job_id':job_id,'validation':[r for r in o.sheets.rows(sid,'Validation') if r.get('Scope')==job_id or any(r.get('Check ID','').startswith(b['Batch ID']) for b in rows)]}
+def _compare_value(value):
+    if value is None:return ''
+    text=' '.join(str(value).strip().split())
+    try:
+        number=float(text)
+        return str(int(number)) if number.is_integer() else str(number)
+    except (TypeError,ValueError):
+        return text
+
+def _row_diff(actual, expected, fields):
+    return {field:{'live':actual.get(field,''),'benchmark':expected.get(field,'')}
+            for field in fields if _compare_value(actual.get(field)) != _compare_value(expected.get(field))}
+
 @app.post('/api/benchmark/compare')
 def benchmark(req:BenchmarkRequest,x_api_token:str|None=Header(default=None)):
- guard(x_api_token);o=live();benchmark_id=req.benchmark_spreadsheet_id or settings.benchmark_spreadsheet_id
- if not benchmark_id:raise HTTPException(400,'benchmark spreadsheet ID required')
- tables=['Asset QC','Itemization','Metadata References','Ready for Metadata','Production Queue']
- result={}
- for sheet in tables:
-  live=o.sheets.rows(req.spreadsheet_id,sheet);target=o.sheets.rows(benchmark_id,sheet)
-  key={'Asset QC':'Digital Asset','Itemization':'Item ID','Metadata References':'Reference ID','Ready for Metadata':'Item ID','Production Queue':'Task ID'}[sheet]
-  lm={r.get(key):r for r in live if r.get(key)};tm={r.get(key):r for r in target if r.get(key)}
-  result[sheet]={'live_count':len(lm),'benchmark_count':len(tm),'missing':sorted(set(tm)-set(lm))[:50],'unexpected':sorted(set(lm)-set(tm))[:50]}
- return {'box':req.box,'matches':all(v['live_count']==v['benchmark_count'] and not v['missing'] and not v['unexpected'] for v in result.values()),'sheets':result}
+    guard(x_api_token);o=live();benchmark_id=req.benchmark_spreadsheet_id or settings.benchmark_spreadsheet_id
+    if not benchmark_id:raise HTTPException(400,'benchmark spreadsheet ID required')
+    specs={
+      'Asset QC':('Digital Asset',['Digital Asset','Assigned Record ID','Template','Type','Asset Role','Required Crop Standard','QC Status','Action Needed','Expected Output Asset Count','Production Queue Eligible']),
+      'Itemization':('Item ID',['Item ID','Digital Assets','Digital Asset Count','Logical Component Count','Template','Type','Metadata Readiness','Production Task Count']),
+      'Metadata References':('Reference ID',['Reference ID','Digital Assets','Digital Asset Count','Reference Role','Template','QC Status','Action Needed','Metadata Readiness']),
+      'Ready for Metadata':('Item ID',['Item ID','Digital Assets','Digital Asset Count','Template','Type','Metadata Readiness']),
+      'Production Queue':('Task ID',['Task ID','Assigned Record ID','Digital Asset','Action Needed','Expected Output Asset Count','Task Status']),
+    }
+    result={};all_match=True
+    for sheet,(key,fields) in specs.items():
+        live_rows=o.sheets.rows(req.spreadsheet_id,sheet);target_rows=o.sheets.rows(benchmark_id,sheet)
+        lm={r.get(key):r for r in live_rows if r.get(key)};tm={r.get(key):r for r in target_rows if r.get(key)}
+        missing=sorted(set(tm)-set(lm));unexpected=sorted(set(lm)-set(tm));mismatches=[]
+        for k in sorted(set(lm)&set(tm)):
+            diff=_row_diff(lm[k],tm[k],fields)
+            if diff:mismatches.append({'key':k,'fields':diff})
+        matched=not missing and not unexpected and not mismatches
+        all_match=all_match and matched
+        result[sheet]={'live_count':len(lm),'benchmark_count':len(tm),'missing':missing[:100],'unexpected':unexpected[:100],'value_mismatches':mismatches[:100],'matches':matched}
+    return {'box':req.box,'matches':all_match,'sheets':result}

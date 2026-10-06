@@ -33,8 +33,19 @@ curl -X POST http://localhost:8000/api/benchmark/compare -H 'Content-Type: appli
 
 Restart the API and call `/start` again. Batch Queue and staging are checked before another inspection call. `Committed - Validated` is a verified no-op. `Commit Written - Pending Validation` replays deterministic expected rows, rejects conflicts, and validates readback. Use `/api/batches/{batch_id}/retry` only for retryable/blocked batches after reviewing the recorded error.
 
+## Diagnostics
+
+Each inspection attempt writes a safe JSON diagnostic file under `DIAGNOSTICS_DIR` (default `./logs`). The file records the model, response ID/status, token usage, elapsed time, authorized filenames, returned filenames, returned record IDs, missing/extra filenames, and the exact validation error. It never records API keys, prompts, or image bytes. Attach the matching `logs/HIT-..._B..._attempt-....json` file when reporting a failure.
+
 If the OpenAI account is out of credits, the current batch becomes `Blocked - Human Review` and later batches are not sent. Completed batches stay as they are. This does not count against `MAX_RETRIES`. `GET /api/jobs/{job_id}`, `/batches`, and `/usage` return `alert` with the reason and the resume instruction. Add credits, then call `POST /api/jobs/{job_id}/resume`. A normal rate limit stays `Inspection Failed - Retryable`.
 
 ## Current limits
 
-The uploaded packet does not contain the four governing DOCX references or zipped developer reference named by the client, so live OpenAI inspection is intentionally blocked until they are supplied. Google Sheets tab creation for the auxiliary `HistoryIT Jobs` and `OpenAI Usage` tabs should be performed before the first live job (or enabled in the adapter). Real Box 19/Box 30 runs still require client credentials and acceptance review.
+The governing DOCX packet is included under `governing/`. The Developer Test and Frozen Benchmark spreadsheet IDs, Google credentials, and OpenAI credentials are deployment inputs, so live Box 19/Box 30 runs still require client access and acceptance review. Google Sheets tab creation for the auxiliary `HistoryIT Jobs` and `OpenAI Usage` tabs should be performed before the first live job (or enabled in the adapter).
+
+
+## Repair notes
+
+The orchestrator honors `BATCH_SIZE` exactly, including for folders with fewer than 25 files. A model response is rejected before staging unless it contains one ordered asset row for every authorized filename and every asset links to a returned record row. Record staging history uses a batch plus record key so an open item can continue without replacing prior staging evidence. The benchmark endpoint compares substantive row fields, missing keys, unexpected keys, and value mismatches.
+
+Use a clean copy of the Developer Test register for every acceptance attempt. Do not reuse a sheet containing a previously committed wrong classification. The Frozen Benchmark is read-only. Rotate any service-account or OpenAI secrets that were ever stored in a ZIP, Cursor export, chat, or source repository.

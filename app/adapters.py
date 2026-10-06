@@ -1,9 +1,39 @@
 """Live integrations. Source reader and register writer are kept separate."""
 from __future__ import annotations
 from typing import Any
-import io, threading
+import io, threading, time
 
 IMAGE_MIME = {'image/jpeg','image/png','image/tiff','image/webp'}
+
+def _status(exc):
+    resp = getattr(exc, 'resp', None)
+    status = getattr(resp, 'status', None)
+    try:
+        return int(status)
+    except (TypeError, ValueError):
+        return None
+
+def _retryable(exc):
+    status = _status(exc)
+    if status == 429 or (status is not None and status >= 500):
+        return True
+    if status is not None:
+        return False
+    text = f'{type(exc).__name__} {exc}'
+    markers = ('ConnectionResetError', 'ConnectionAbortedError', 'TimeoutError', 'ConnectionError', 'RemoteDisconnected', 'ServerNotFoundError', 'SSLError', 'timed out', 'WinError 10054', 'WinError 10053')
+    return any(marker in text for marker in markers)
+
+def _execute(lock, build, sleep=time.sleep):
+    delay = 5
+    for attempt in range(5):
+        try:
+            with lock:
+                return build().execute()
+        except Exception as exc:
+            if not _retryable(exc) or attempt == 4:
+                raise
+            sleep(delay)
+            delay = min(delay * 2, 60)
 
 def _google_api(name, version, creds, timeout):
     import httplib2
@@ -20,12 +50,12 @@ class Drive:
         self._lock = threading.RLock()
 
     def _execute(self, request):
-        with self._lock:
-            return request.execute()
+        return _execute(self._lock, request)
 
     def enumerate(self, root: str):
         from app.models import Source
-        seen, out, stack = set(), [], [(root,'')]
+        root_name = self._execute(lambda: self.api.files().get(fileId=root, fields='name', supportsAllDrives=True))['name']
+        seen, out, stack = set(), [], [(root, root_name)]
         while stack:
             fid, path = stack.pop()
             if fid in seen: raise ValueError('Drive folder cycle or duplicate folder ID')
@@ -33,7 +63,7 @@ class Drive:
             token = None
             children = []
             while True:
-                response = self._execute(self.api.files().list(q=f"'{fid}' in parents and trashed = false", fields='nextPageToken,files(id,name,mimeType)',pageSize=1000,pageToken=token,supportsAllDrives=True,includeItemsFromAllDrives=True))
+                response = self._execute(lambda fid=fid, token=token: self.api.files().list(q=f"'{fid}' in parents and trashed = false", fields='nextPageToken,files(id,name,mimeType)',pageSize=1000,pageToken=token,supportsAllDrives=True,includeItemsFromAllDrives=True))
                 children.extend(response.get('files',[]))
                 token = response.get('nextPageToken')
                 if not token: break
@@ -47,7 +77,7 @@ class Drive:
 
     def image(self, source):
         # Only called by inspection. Never injected into the commit service.
-        return self._execute(self.api.files().get_media(fileId=source.id,supportsAllDrives=True))
+        return self._execute(lambda: self.api.files().get_media(fileId=source.id,supportsAllDrives=True))
 
 class Sheets:
     def __init__(self, credentials=None):
@@ -55,14 +85,14 @@ class Sheets:
         creds=credentials or default(scopes=['https://www.googleapis.com/auth/spreadsheets'])[0]
         self.api=_google_api('sheets','v4',creds,180).spreadsheets()
         self._headers={}
+        self._cache={}
         self._lock=threading.RLock()
 
     def _execute(self, request):
-        with self._lock:
-            return request.execute()
+        return _execute(self._lock, request)
 
     def _values(self,sid,range_):
-        return self._execute(self.api.values().get(spreadsheetId=sid,range=range_,valueRenderOption='UNFORMATTED_VALUE')).get('values',[])
+        return self._execute(lambda: self.api.values().get(spreadsheetId=sid,range=range_,valueRenderOption='UNFORMATTED_VALUE')).get('values',[])
 
     def headers(self,sid,sheet):
         k=(sid,sheet)
@@ -74,16 +104,20 @@ class Sheets:
         return self._headers[k]
 
     def rows(self,sid,sheet):
+        key=(sid,sheet)
+        if key in self._cache:
+            return [dict(row) for row in self._cache[key]]
         h,columns=self.headers(sid,sheet)
         values=self._values(sid,f"'{sheet}'!A{h+1}:ZZ")
         out=[]
         for n,r in enumerate(values,h+1):
             row={name:str(r[j]) if j<len(r) and r[j] is not None else '' for name,j in columns.items()}
             if any(row.values()): row['_row']=n;out.append(row)
-        return out
+        self._cache[key]=out
+        return [dict(row) for row in out]
 
     def _put(self,sid,range_,values):
-        self._execute(self.api.values().update(spreadsheetId=sid,range=range_,valueInputOption='RAW',body={'values':values}))
+        self._execute(lambda: self.api.values().update(spreadsheetId=sid,range=range_,valueInputOption='RAW',body={'values':values}))
         actual=self._values(sid,range_)
         width=max((len(r) for r in values), default=0)
         def norm(rows):
@@ -107,28 +141,62 @@ class Sheets:
     def write(self,sid,sheet,row,key=None):
         h,headers=self.headers(sid,sheet)
         existing=self.rows(sid,sheet)
-        matches=[r for r in existing if key and r.get(key[0])==str(key[1])]
-        if len(matches)>1: raise ValueError(f'Duplicate key in {sheet}: {key}')
-        target=matches[0]['_row'] if matches else max([h]+[r['_row'] for r in existing])+1
-        if matches:
-            for name,value in row.items():
-                if name not in headers: raise ValueError(f'Missing {name} in {sheet}')
-                col=self.col(headers[name]);self._put(sid,f"'{sheet}'!{col}{target}",[[str(value)]])
+        if isinstance(key, list):
+            matches=[r for r in existing if all(r.get(k)==str(v) for k,v in key)]
         else:
-            unknown=set(row)-set(headers)
-            if unknown: raise ValueError(f'Missing columns in {sheet}: {unknown}')
-            width=max(headers.values())+1
-            vals=['']*width
-            for name,value in row.items(): vals[headers[name]]=str(value)
-            self._put(sid,f"'{sheet}'!A{target}:{self.col(width-1)}{target}",[vals])
+            matches=[r for r in existing if key and r.get(key[0])==str(key[1])]
+        if len(matches)>1: raise ValueError(f'Duplicate key in {sheet}: {key}')
+        unknown=set(row)-set(headers)
+        if unknown: raise ValueError(f'Missing columns in {sheet}: {unknown}')
+        if matches:
+            target=matches[0]['_row']
+            updates=[(f"'{sheet}'!{self.col(headers[name])}{target}", '' if value is None else str(value)) for name,value in row.items()]
+            self._put_cells(sid, updates)
+            cached=self._cache.setdefault((sid,sheet),[])
+            for current in cached:
+                if current.get('_row')==target:
+                    for name,value in row.items(): current[name]='' if value is None else str(value)
+                    break
+            return target
+        target=max([h]+[r['_row'] for r in existing])+1
+        width=max(headers.values())+1
+        vals=['']*width
+        stored={name:'' for name in headers}
+        stored['_row']=target
+        for name,value in row.items():
+            text='' if value is None else str(value)
+            vals[headers[name]]=text
+            stored[name]=text
+        self._put(sid,f"'{sheet}'!A{target}:{self.col(width-1)}{target}",[vals])
+        self._cache.setdefault((sid,sheet),[]).append(stored)
         return target
 
+    def _put_cells(self,sid,updates):
+        data=[{'range':rng,'values':[[value]]} for rng,value in updates]
+        self._execute(lambda: self.api.values().batchUpdate(spreadsheetId=sid,body={'valueInputOption':'RAW','data':data}))
+        got=self._execute(lambda: self.api.values().batchGet(spreadsheetId=sid,ranges=[rng for rng,_ in updates],valueRenderOption='UNFORMATTED_VALUE')).get('valueRanges',[])
+        if len(got)!=len(updates): raise RuntimeError('Readback failed for cell batch')
+        for (rng,value),item in zip(updates,got):
+            cells=item.get('values') or [['']]
+            actual='' if not cells or not cells[0] else cells[0][0]
+            if str(actual)!=str(value): raise RuntimeError(f'Readback failed for {rng}')
+
+    def clear(self,sid,sheet,row_number,key):
+        if not row_number: return
+        h,headers=self.headers(sid,sheet)
+        width=max(headers.values())+1
+        self._put(sid,f"'{sheet}'!A{row_number}:{self.col(width-1)}{row_number}",[['']*width])
+        cached=self._cache.get((sid,sheet))
+        if cached is not None:
+            self._cache[(sid,sheet)]=[row for row in cached if row.get('_row')!=row_number]
+
     def ensure_tab(self,sid,name,headers):
-        meta=self._execute(self.api.get(spreadsheetId=sid,fields='sheets.properties.title'))
+        meta=self._execute(lambda: self.api.get(spreadsheetId=sid,fields='sheets.properties.title'))
         if name not in {x['properties']['title'] for x in meta['sheets']}:
-            self._execute(self.api.batchUpdate(spreadsheetId=sid,body={'requests':[{'addSheet':{'properties':{'title':name}}}]}))
+            self._execute(lambda: self.api.batchUpdate(spreadsheetId=sid,body={'requests':[{'addSheet':{'properties':{'title':name}}}]}))
             self._put(sid,f"'{name}'!A1:{self.col(len(headers)-1)}1",[list(headers)])
         self._headers.pop((sid,name),None)
+        self._cache.pop((sid,name),None)
 
     def field(self,sid,name):
         for row in self.rows(sid,'Continuation State'):

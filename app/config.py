@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     openai_output_usd_per_million: float = Field(default=0, ge=0)
     api_token: str = ''
     job_index_spreadsheet_id: str = ''
+    openai_timeout_seconds: int = Field(default=900, ge=60, le=3600)
+    openai_max_output_tokens: int = Field(default=30000, ge=1000, le=100000)
+    openai_reasoning_effort: str = ''
+    diagnostics_dir: str = './logs'
 
     def validate_live(self):
         from pathlib import Path

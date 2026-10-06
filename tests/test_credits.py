@@ -99,7 +99,11 @@ class InspectionCreditTests(unittest.TestCase):
 
             class Drive:
                 def image(self, source):
-                    return b'image-bytes'
+                    from io import BytesIO
+                    from PIL import Image
+                    out = BytesIO()
+                    Image.new('RGB', (8, 8), 'white').save(out, format='JPEG')
+                    return out.getvalue()
 
             class Client:
                 def __init__(self):

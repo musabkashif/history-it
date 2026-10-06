@@ -16,5 +16,5 @@
 | Benchmark comparison | `/api/benchmark/compare` read-only key diff | Requires both register IDs |
 | Frozen benchmark | only read in compare endpoint | No benchmark write path |
 
-## Unavailable supplied material
-The four governing packet documents listed by the client were not present in the upload: master orchestration instructions, Odyssey template reference, cropping reference, scrapbook cropping reference, and the zipped developer reference. The service therefore requires those documents in `GOVERNING_DOCS_DIR` before a live inspection job can run. No archival rules were invented to replace them.
+## Live-only material
+The four governing packet documents are included in `governing/` and are copied by the updater when missing. Google Drive/Sheets IDs, service-account credentials, OpenAI credentials, and a live Developer Test register are not available in this build environment, so live Box 19 execution and benchmark reconciliation remain deployment gates. No archival rules were invented to replace client material.
