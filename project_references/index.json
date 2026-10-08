@@ -1,0 +1,12 @@
+{
+  "required": [],
+  "generic": "generic-archival-method.json",
+  "approved_calibration": [
+    {
+      "project": "Tri Delta Chapters",
+      "box": "Chapters Box 19",
+      "folders": ["F01", "F02"],
+      "file": "tri-delta-chapters-f01-calibration.json"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+{
+  "reference_id": "generic-archival-method",
+  "statement": "Use the client runtime prompt, the governing documents, and the authorized images. Do not treat a batch boundary as an intellectual-item boundary by itself. When Batch Queue Prior Open Item names an existing record, preserve that record id and its already committed assets. This file does not contain folder answer keys."
+}

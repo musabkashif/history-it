@@ -1,6 +1,7 @@
 .env
 *.json
 !*.example.json
+!project_references/**/*.json
 __pycache__/
 .pytest_cache/
 .venv/

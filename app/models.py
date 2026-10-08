@@ -94,12 +94,21 @@ class JobState(BaseModel):
     project: str
     spreadsheet_id: str
     source_folder_id: str
+    authorized_source_folder_ids: list[str] = []
     batches: int
     status: str
     next_batch: str | None = None
     alert: str | None = None
 
+class FolderAuthorize(BaseModel):
+    source_folder_id: str
+    batch_size: int | None = Field(default=None, ge=1, le=100)
+
 class BenchmarkRequest(BaseModel):
     spreadsheet_id: str
     benchmark_spreadsheet_id: str | None = None
     box: str = 'Chapters Box 19'
+    folder: str = ''
+
+class F01CheckpointRequest(BaseModel):
+    spreadsheet_id: str

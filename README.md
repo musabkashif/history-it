@@ -24,7 +24,11 @@ curl http://localhost:8000/health
 curl -X POST http://localhost:8000/api/jobs -H 'Content-Type: application/json' \
   -d '{"project":"Tri Delta Chapters","source_folder_id":"DRIVE_FOLDER_ID","spreadsheet_id":"REGISTER_ID","batch_size":10,"box":"Chapters Box 19"}'
 curl -X POST http://localhost:8000/api/jobs/HIT-.../start
+curl -X POST http://localhost:8000/api/jobs/HIT-.../folders -H 'Content-Type: application/json' \
+  -d '{"source_folder_id":"F02_FOLDER_ID"}'
 curl http://localhost:8000/api/jobs/HIT-.../usage
+curl -X POST http://localhost:8000/api/benchmark/f01-checkpoint -H 'Content-Type: application/json' \
+  -d '{"spreadsheet_id":"DEVELOPER_ID"}'
 curl -X POST http://localhost:8000/api/benchmark/compare -H 'Content-Type: application/json' \
   -d '{"spreadsheet_id":"DEVELOPER_ID","benchmark_spreadsheet_id":"FROZEN_ID"}'
 ```
@@ -46,6 +50,12 @@ The governing DOCX packet is included under `governing/`. The Developer Test and
 
 ## Repair notes
 
-The orchestrator honors `BATCH_SIZE` exactly, including for folders with fewer than 25 files. A model response is rejected before staging unless it contains one ordered asset row for every authorized filename and every asset links to a returned record row. Record staging history uses a batch plus record key so an open item can continue without replacing prior staging evidence. The benchmark endpoint compares substantive row fields, missing keys, unexpected keys, and value mismatches.
+The orchestrator honors `BATCH_SIZE` exactly, including for folders with fewer than 25 files. Inspection reads `Prior Open Item` from the current Batch Queue row. Continuation State is updated only after a successful commit and does not override that row. A model response is rejected before staging unless it contains one ordered asset row for every authorized filename and every asset links to a returned record row. Original Drive bytes are sent when they fit the API limits; a required resize keeps the aspect ratio and a high-quality encoding.
+
+`project_references/tri-delta-chapters-f01-calibration.json` (`tri-delta-chapters-box19-f01-calibration`, version `2026-10-07.1`) is a client-approved calibration example for Tri Delta Chapters, Chapters Box 19, folders F01 and F02. Inspection loads it and logs that reference ID and version. It is not an executable rule: commit, identity assignment, and Sheets writes do not copy its groups onto staging. If a model answer contradicts that example on the same known F01 filenames, the batch stops before commit and staging is left unchanged. Unapproved answer files are refused.
+
+The benchmark compare endpoint reports row-level differences and classifies the result as an exact match, internally consistent only, or a semantic mismatch. It does not write either workbook. A register that contains only F01 will not be an exact match to the six-folder Frozen Benchmark. The frozen workbook is the final Box 19 state after F02 resolved the F01 letter, so a correct F01-only Review/Open register is a `semantic_benchmark_mismatch` against that letter even when `folder` is `F01`. Use `POST /api/benchmark/f01-checkpoint` for the client-approved intermediate F01 outcome. Its outcomes are `f01_intermediate_match` and `f01_intermediate_mismatch`. It reads only the developer register and does not open the Frozen Benchmark. Whole-workbook `exact_match` waits until F01–F06 have been processed.
+
+After F01 is `Committed - Validated`, authorize F02 on the same job with `POST /api/jobs/{job_id}/folders`. That call enumerates only the supplied folder, queues it, and does not start inspection. A second `POST /api/jobs` for the F02 folder is a different job and is rejected by the clean-first-batch guard. `Committed - Validated` means the batch's own staging, source count, and readback passed. It is not by itself F02–F06 acceptance or a whole-workbook benchmark match. F01 source processing may be `Completed - Validated` while the letter remains open for F02.
 
 Use a clean copy of the Developer Test register for every acceptance attempt. Do not reuse a sheet containing a previously committed wrong classification. The Frozen Benchmark is read-only. Rotate any service-account or OpenAI secrets that were ever stored in a ZIP, Cursor export, chat, or source repository.

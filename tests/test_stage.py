@@ -406,29 +406,43 @@ class StageControlTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'captured'):
                 Inspector(Settings(), Drive(), client=Client()).inspect('HIT-1', 'B1', [SourceFile()], {'folder_code': 'F01', 'prior_open_item': 'None'}, [])
             instruction = captured['input'][0]['content']
+            self.assertIn('INSPECTION PHASE ONLY', instruction)
             self.assertIn('Archival Border Crop', instruction)
-            self.assertIn('batch boundary does not close', instruction)
-            self.assertIn('blank back stays on that same Metadata Only reference', instruction)
+            self.assertIn('technical batch boundary does not force', instruction)
+            self.assertNotIn('blank back stays on that same Metadata Only reference', instruction)
+            self.assertNotIn('F01-Report', instruction)
+            self.assertNotIn('Frozen Benchmark', instruction)
             self.assertIn('Folder covers are Metadata Only.', instruction)
             image = captured['input'][1]['content'][2]
             self.assertTrue(image['image_url'].startswith('data:image/jpeg;base64,'))
+            self.assertEqual(image['detail'], 'high')
+            payload = json.loads(captured['input'][1]['content'][0]['text'])
+            self.assertIsNone(payload['approved_project_reference'])
+            self.assertNotIn('Frozen Benchmark', captured['input'][1]['content'][0]['text'])
 
-    def test_model_jpeg_shrinks_the_long_edge(self):
+    def test_original_image_is_not_crushed_to_a_lossy_preview(self):
         from io import BytesIO
         from PIL import Image
-        from app.inspection import model_jpeg
+        from app.images import prepare_model_image
         source = BytesIO()
         Image.new('RGB', (4000, 1000), 'red').save(source, format='JPEG', quality=95)
-        reduced = model_jpeg(source.getvalue())
-        with Image.open(BytesIO(reduced)) as image:
-            self.assertEqual(image.format, 'JPEG')
-            self.assertEqual(max(image.size), 2048)
-            self.assertLess(min(image.size), 1000)
-        small = BytesIO()
-        Image.new('RGB', (800, 600), 'blue').save(small, format='JPEG')
-        kept = model_jpeg(small.getvalue())
+        original = source.getvalue()
+        kept, mime, mode = prepare_model_image(original, 'image/jpeg')
+        self.assertEqual(mode, 'original')
+        self.assertEqual(mime, 'image/jpeg')
+        self.assertEqual(kept, original)
         with Image.open(BytesIO(kept)) as image:
-            self.assertEqual(image.size, (800, 600))
+            self.assertEqual(image.size, (4000, 1000))
+        large = BytesIO()
+        Image.new('RGB', (6000, 3000), 'blue').save(large, format='JPEG', quality=95)
+        reduced, reduced_mime, reduced_mode = prepare_model_image(
+            large.getvalue(), 'image/jpeg', original_max_edge=4000, resize_max_edge=4096, jpeg_quality=95,
+        )
+        self.assertEqual(reduced_mode, 'resized-high-quality')
+        self.assertIn(reduced_mime, {'image/png', 'image/jpeg'})
+        with Image.open(BytesIO(reduced)) as image:
+            self.assertEqual(image.size, (4096, 2048))
+            self.assertGreater(max(image.size), 2048)
 
     def test_dropped_connection_is_retried_and_a_client_error_is_not(self):
         from threading import Lock

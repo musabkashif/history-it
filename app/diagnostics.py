@@ -19,7 +19,8 @@ def _safe(value: Any) -> Any:
         return value
     if isinstance(value, str):
         # Keep errors useful while preventing accidental credential leakage.
-        return re.sub(r"(?i)(sk-[A-Za-z0-9_-]+|Bearer\s+[A-Za-z0-9._-]+|AIza[A-Za-z0-9_-]+)", "[REDACTED]", value)
+        value = re.sub(r"(?i)(sk-[A-Za-z0-9_-]+|Bearer\s+[A-Za-z0-9._-]+|AIza[A-Za-z0-9_-]+)", "[REDACTED]", value)
+        return re.sub(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----", "[REDACTED]", value)
     if isinstance(value, dict):
         return {str(k): _safe(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):

@@ -4,8 +4,9 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Header, Request
 from fastapi.responses import JSONResponse
 from googleapiclient.errors import HttpError
 from app.config import Settings
-from app.models import JobCreate, JobState, BenchmarkRequest
+from app.models import JobCreate, JobState, BenchmarkRequest, FolderAuthorize, F01CheckpointRequest
 from app.adapters import Drive, Sheets
+from app.benchmark import SPECS, compare_workbooks, f01_calibration_checkpoint
 from app.inspection import Inspector
 from app.orchestrator import Orchestrator
 
@@ -59,6 +60,9 @@ def health():return {'status':'ok','service':'historyit-archive-mvp','configured
 @app.post('/api/jobs',response_model=JobState)
 def create(req:JobCreate,x_api_token:str|None=Header(default=None)):
  guard(x_api_token);return call(live().create,req)
+@app.post('/api/jobs/{job_id}/folders',response_model=JobState)
+def authorize_folder(job_id:str,req:FolderAuthorize,x_api_token:str|None=Header(default=None)):
+ guard(x_api_token);return call(live().authorize_folder,job_id,req)
 @app.post('/api/jobs/{job_id}/start',response_model=JobState)
 def start(job_id:str,background:BackgroundTasks,x_api_token:str|None=Header(default=None)):
  guard(x_api_token);o=live();state=call(o.state,job_id);background.add_task(o.start,job_id);return state
@@ -82,39 +86,44 @@ def validate(job_id:str,x_api_token:str|None=Header(default=None)):
 @app.get('/api/jobs/{job_id}/validation')
 def validations(job_id:str,x_api_token:str|None=Header(default=None)):
  guard(x_api_token);o=live();sid,rows=call(o._job,job_id);return {'job_id':job_id,'validation':[r for r in o.sheets.rows(sid,'Validation') if r.get('Scope')==job_id or any(r.get('Check ID','').startswith(b['Batch ID']) for b in rows)]}
-def _compare_value(value):
-    if value is None:return ''
-    text=' '.join(str(value).strip().split())
-    try:
-        number=float(text)
-        return str(int(number)) if number.is_integer() else str(number)
-    except (TypeError,ValueError):
-        return text
-
-def _row_diff(actual, expected, fields):
-    return {field:{'live':actual.get(field,''),'benchmark':expected.get(field,'')}
-            for field in fields if _compare_value(actual.get(field)) != _compare_value(expected.get(field))}
+def _load_compare_sheets(sheets, spreadsheet_id):
+    loaded = {}
+    errors = []
+    for name in SPECS:
+        try:
+            loaded[name] = sheets.rows(spreadsheet_id, name)
+        except (ValueError, KeyError) as exc:
+            loaded[name] = []
+            errors.append({'sheet': name, 'error': str(exc)})
+    return loaded, errors
 
 @app.post('/api/benchmark/compare')
 def benchmark(req:BenchmarkRequest,x_api_token:str|None=Header(default=None)):
-    guard(x_api_token);o=live();benchmark_id=req.benchmark_spreadsheet_id or settings.benchmark_spreadsheet_id
-    if not benchmark_id:raise HTTPException(400,'benchmark spreadsheet ID required')
-    specs={
-      'Asset QC':('Digital Asset',['Digital Asset','Assigned Record ID','Template','Type','Asset Role','Required Crop Standard','QC Status','Action Needed','Expected Output Asset Count','Production Queue Eligible']),
-      'Itemization':('Item ID',['Item ID','Digital Assets','Digital Asset Count','Logical Component Count','Template','Type','Metadata Readiness','Production Task Count']),
-      'Metadata References':('Reference ID',['Reference ID','Digital Assets','Digital Asset Count','Reference Role','Template','QC Status','Action Needed','Metadata Readiness']),
-      'Ready for Metadata':('Item ID',['Item ID','Digital Assets','Digital Asset Count','Template','Type','Metadata Readiness']),
-      'Production Queue':('Task ID',['Task ID','Assigned Record ID','Digital Asset','Action Needed','Expected Output Asset Count','Task Status']),
-    }
-    result={};all_match=True
-    for sheet,(key,fields) in specs.items():
-        live_rows=o.sheets.rows(req.spreadsheet_id,sheet);target_rows=o.sheets.rows(benchmark_id,sheet)
-        lm={r.get(key):r for r in live_rows if r.get(key)};tm={r.get(key):r for r in target_rows if r.get(key)}
-        missing=sorted(set(tm)-set(lm));unexpected=sorted(set(lm)-set(tm));mismatches=[]
-        for k in sorted(set(lm)&set(tm)):
-            diff=_row_diff(lm[k],tm[k],fields)
-            if diff:mismatches.append({'key':k,'fields':diff})
-        matched=not missing and not unexpected and not mismatches
-        all_match=all_match and matched
-        result[sheet]={'live_count':len(lm),'benchmark_count':len(tm),'missing':missing[:100],'unexpected':unexpected[:100],'value_mismatches':mismatches[:100],'matches':matched}
-    return {'box':req.box,'matches':all_match,'sheets':result}
+    guard(x_api_token)
+    o = live()
+    benchmark_id = req.benchmark_spreadsheet_id or settings.benchmark_spreadsheet_id
+    if not benchmark_id:
+        raise HTTPException(400, 'benchmark spreadsheet ID required')
+    # Read-only. Neither the developer workbook nor the Frozen Benchmark is written.
+    live_sheets, live_errors = _load_compare_sheets(o.sheets, req.spreadsheet_id)
+    benchmark_sheets, benchmark_errors = _load_compare_sheets(o.sheets, benchmark_id)
+    result = compare_workbooks(live_sheets, benchmark_sheets, box=req.box, folder=req.folder)
+    read_errors = [*live_errors, *[{**item, 'workbook': 'benchmark'} for item in benchmark_errors]]
+    if read_errors:
+        result['matches'] = False
+        result['outcome'] = 'semantic_benchmark_mismatch'
+        result['read_errors'] = read_errors
+    return result
+
+@app.post('/api/benchmark/f01-checkpoint')
+def f01_checkpoint(req:F01CheckpointRequest,x_api_token:str|None=Header(default=None)):
+    guard(x_api_token)
+    o = live()
+    # Reads the developer register only. The Frozen Benchmark is not opened or written.
+    live_sheets, live_errors = _load_compare_sheets(o.sheets, req.spreadsheet_id)
+    result = f01_calibration_checkpoint(live_sheets)
+    if live_errors:
+        result['matches'] = False
+        result['outcome'] = 'f01_intermediate_mismatch'
+        result['read_errors'] = live_errors
+    return result

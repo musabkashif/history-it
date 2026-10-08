@@ -2,39 +2,28 @@ from __future__ import annotations
 import base64, json, time
 from pathlib import Path
 from app.credits import as_credit_error
-from app.models import InspectionOutput
 from app.diagnostics import Diagnostics
+from app.images import JPEG_QUALITY, ORIGINAL_MAX_BYTES, ORIGINAL_MAX_EDGE, RESIZE_MAX_EDGE, prepare_model_image
+from app.models import InspectionOutput
 
-INSPECTION_CONTRACT = """Inspection phase only. Return Lean Split v2 staging rows. Do not update a spreadsheet, choose a batch, or calculate cumulative totals.
+OUTPUT_SCHEMA = """Structured output schema only. This text does not decide record boundaries, record types, templates, or metadata readiness. Those judgments come from the client runtime prompt, the governing documents, the authorized images, and any client-approved calibration example in the user payload.
 
-The payload context is authoritative. context.prior_open_item None means there is no open item; do not invent one from earlier work. When a prior open item exists, preserve that record id, continue it only when these images are the same intellectual item, and set Record Operation to Update Existing Open Record. Distinguish new filenames from assets already committed. A batch boundary does not close an intellectual item. A folder boundary does not close an item unless the governing workflow and the images support closure. If the item continues past this batch, Boundary State After Record must start with Open.
+Return Lean Split v2 Asset Staging and Record Staging as the structured object. Do not update a spreadsheet, choose a batch, or calculate cumulative totals. All values must be strings. Inspect every authorized image. Preserve every authorized filename exactly once, in manifest order. Each Assigned Record ID must equal a Proposed Record ID in this response. Record Kind is Normal Odyssey or Metadata Only. Record Operation is Create New or Update Existing Open Record. Copy context.prior_open_item from the payload when continuing that record; do not replace a None value and do not create a second record for it. Copy context.folder_code exactly.
 
-Visually inspect every authorized image. Do not sample. Apply the governing documents, including their tables. Folder covers, enclosure labels, project identifier sheets, descriptive inventories, contextual packets, wrappers, and similar context-only captures are Metadata Only. Do not turn those captures into Ready Odyssey records or production tasks.
+When Boundary State After Record starts with Open, or Metadata Readiness is Review, write the visual evidence for that decision in Review Note. Leave Review Note blank only when the record is neither Review nor Open. A folder boundary does not by itself close an item."""
 
-A blank back belongs with the same capture as its front. On a normal Odyssey item, that blank back stays a normal asset of that item. On a folder cover, enclosure label, identifier sheet, descriptive inventory, or other context-only capture, the blank back stays on that same Metadata Only reference. Do not promote that pair into a Ready Odyssey record because the back is blank.
-
-If the last images in this batch are still part of a multi-page item, and this batch does not contain the end of that item, Boundary State After Record must start with Open. The next batch continues it. A batch boundary does not close an intellectual item.
-
-Use Action Needed values from the governing action table exactly. No Adjustment, N/A, and Review are not production tasks. Crop / Recrop, Deskew, Rotate, Split Spread, Publication Crop, Archival Border Crop, Create Derivative Crop, Reshoot, and Additional Imaging Required are production tasks. Production Queue Eligible follows that action.
-
-context.folder_code is the Source Group / Folder and the Processing Unit. Use that folder code exactly. Do not copy a status phrase such as Not Started or Completed.
-
-Assigned Record ID and Proposed Record ID are grouping keys. Assets that belong to one intellectual record share one key, and that key has exactly one Record Staging row. To continue the prior open item, use its exact id. Otherwise use a short local key. The service replaces local keys with the register id. Do not invent a project code.
-
-Record Kind is Normal Odyssey or Metadata Only. Record Operation is Create New or Update Existing Open Record. A Normal Odyssey record needs Metadata Readiness of Ready, Blocked - Cropping/QC, Blocked - Additional Imaging, or Review. Use only controlled values from the rules payload. All values must be strings. Preserve filenames and do not invent a missing image."""
-
-def model_jpeg(data):
-    """Smaller JPEG for the model only. Drive bytes are not modified."""
-    from io import BytesIO
-    from PIL import Image, ImageOps
-    with Image.open(BytesIO(data)) as image:
-        image = ImageOps.exif_transpose(image)
-        image.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
-        if image.mode not in ('RGB', 'L'):
-            image = image.convert('RGB')
-        out = BytesIO()
-        image.save(out, format='JPEG', quality=80, optimize=True)
-        return out.getvalue()
+def _runtime_prompt(settings):
+    configured = getattr(settings, 'runtime_prompt_path', None) or ''
+    candidates = []
+    if configured:
+        candidates.append(Path(configured))
+    app_dir = Path(__file__).resolve().parents[1]
+    candidates.append(app_dir.parent / 'Runtime_prompt_old_chatgpt.md')
+    candidates.append(app_dir / 'prompts' / 'Runtime_prompt_old_chatgpt.md')
+    for path in candidates:
+        if path.is_file():
+            return path.read_text(encoding='utf-8'), path.name
+    raise ValueError('Canonical runtime prompt is missing. Set RUNTIME_PROMPT_PATH to Runtime_prompt_old_chatgpt.md')
 
 def _docx_text(path):
     from docx import Document
@@ -50,47 +39,153 @@ def _docx_text(path):
             parts.append(f'Table {index}\n' + '\n'.join(rows))
     return '\n'.join(parts)
 
+def _estimate_cost(settings, inp, cached, out):
+    in_rate = float(getattr(settings, 'openai_input_usd_per_million', 0) or 0)
+    cached_rate = float(getattr(settings, 'openai_cached_input_usd_per_million', 0) or 0)
+    out_rate = float(getattr(settings, 'openai_output_usd_per_million', 0) or 0)
+    return ((inp - cached) * in_rate + cached * cached_rate + out * out_rate) / 1e6
+
 class Inspector:
-    def __init__(self,settings,drive,client=None):
-        self.settings=settings;self.drive=drive
-        self.diagnostics=Diagnostics(getattr(settings, 'diagnostics_dir', './logs'))
+    def __init__(self, settings, drive, client=None):
+        self.settings = settings
+        self.drive = drive
+        self.diagnostics = Diagnostics(getattr(settings, 'diagnostics_dir', './logs'))
         if client is None:
             from openai import OpenAI
-            client=OpenAI(api_key=settings.openai_api_key,max_retries=0,timeout=getattr(settings,'openai_timeout_seconds',900))
-        self.client=client
+            client = OpenAI(api_key=settings.openai_api_key, max_retries=0, timeout=getattr(settings, 'openai_timeout_seconds', 900))
+        self.client = client
 
-    def inspect(self,job,batch,sources,context,rules):
-        docs=Path(self.settings.governing_docs_dir)
-        references=[]
+    def inspect(self, job, batch, sources, context, rules):
+        prompt_text, prompt_name = _runtime_prompt(self.settings)
+        docs = Path(self.settings.governing_docs_dir)
+        references = []
+        doc_names = []
         for path in sorted(docs.iterdir()):
-            if path.suffix.lower() in {'.md','.txt'}:
-                references.append(path.name+'\n'+path.read_text(encoding='utf-8'))
-            elif path.suffix.lower()=='.docx':
-                references.append(path.name+'\n'+_docx_text(path))
-        if not references: raise ValueError('No readable governing documents')
-        images=[]
-        for src in sources:
-            data=model_jpeg(self.drive.image(src))
-            images.append({'type':'input_text','text':f'Source filename: {src.name}; Drive ID: {src.id}'})
-            images.append({'type':'input_image','image_url':f'data:image/jpeg;base64,{base64.b64encode(data).decode()}'})
-        instruction='\n\n'.join(references)+'\n\n'+INSPECTION_CONTRACT
-        payload={'job_id':job,'batch_id':batch,'context':context,'rules':rules,'authorized_filenames':[s.name for s in sources]}
-        start=time.monotonic()
-        response_meta={}
+            if path.suffix.lower() in {'.md', '.txt'}:
+                references.append(path.name + '\n' + path.read_text(encoding='utf-8'))
+                doc_names.append(path.name)
+            elif path.suffix.lower() == '.docx':
+                references.append(path.name + '\n' + _docx_text(path))
+                doc_names.append(path.name)
+        if not references:
+            raise ValueError('No readable governing documents')
+        approved = context.get('approved_project_reference') if isinstance(context, dict) else None
+        reference_id = ''
+        reference_version = ''
+        if isinstance(approved, dict):
+            reference_id = approved.get('reference_id') or approved.get('source_file') or ''
+            reference_version = str(approved.get('version') or '')
+        images = []
+        modes = []
         attempt = int(getattr(context, 'attempt', 0) or 0) if not isinstance(context, dict) else int(context.get('inspection_attempt', 0) or 0)
-        # The orchestrator supplies the attempt in context. Keep a useful
-        # fallback for direct callers and tests.
-        max_tokens=getattr(self.settings,'openai_max_output_tokens',0)
-        effort=(getattr(self.settings,'openai_reasoning_effort','') or '').strip()
-        self.diagnostics.write(job, batch, attempt, 'request_prepared', model=self.settings.openai_model,
-                               reasoning_effort=effort, max_output_tokens=max_tokens,
-                               source_image_count=len(sources), authorized_filenames=[s.name for s in sources],
-                               prompt_character_count=len(instruction), rules_count=len(rules))
+        start = time.monotonic()
+        original_max_bytes = int(getattr(self.settings, 'image_original_max_bytes', ORIGINAL_MAX_BYTES) or ORIGINAL_MAX_BYTES)
+        original_max_edge = int(getattr(self.settings, 'image_original_max_edge', ORIGINAL_MAX_EDGE) or ORIGINAL_MAX_EDGE)
+        resize_max_edge = int(getattr(self.settings, 'image_resize_max_edge', RESIZE_MAX_EDGE) or RESIZE_MAX_EDGE)
+        jpeg_quality = int(getattr(self.settings, 'image_jpeg_quality', JPEG_QUALITY) or JPEG_QUALITY)
         try:
-            request={'model':self.settings.openai_model,'input':[{'role':'system','content':instruction},{'role':'user','content':[{'type':'input_text','text':json.dumps(payload)}]+images}], 'text_format':InspectionOutput}
-            if max_tokens: request['max_output_tokens']=max_tokens
-            if effort: request['reasoning']={'effort':effort}
-            response=self.client.responses.parse(**request)
+            for src in sources:
+                raw = self.drive.image(src)
+                if hasattr(raw, 'read'):
+                    raw = raw.read()
+                data, mime, mode = prepare_model_image(
+                    raw,
+                    getattr(src, 'mime_type', '') or 'image/jpeg',
+                    original_max_bytes=original_max_bytes,
+                    original_max_edge=original_max_edge,
+                    resize_max_edge=resize_max_edge,
+                    jpeg_quality=jpeg_quality,
+                )
+                modes.append({'filename': src.name, 'mode': mode, 'mime': mime})
+                images.append({'type': 'input_text', 'text': f'Source filename: {src.name}; Drive ID: {src.id}'})
+                images.append({
+                    'type': 'input_image',
+                    'image_url': f'data:{mime};base64,{base64.b64encode(data).decode()}',
+                    'detail': 'high',
+                })
+        except Exception as exc:
+            setattr(exc, 'elapsed_seconds', round(time.monotonic() - start, 2))
+            try:
+                path = self.diagnostics.write(
+                    job, batch, attempt, 'inspection_error', error_type=type(exc).__name__, error=str(exc),
+                    elapsed_seconds=getattr(exc, 'elapsed_seconds', 0), success=False, image_preparation=modes,
+                )
+                setattr(exc, 'diagnostics_path', str(path))
+            except Exception:
+                pass
+            raise
+        instruction = (
+            'The client runtime prompt below is the canonical inspection workflow. '
+            'Return Lean Split v2 Asset Staging and Record Staging in the structured object. '
+            'Do not update Google Sheets. '
+            'A client-approved calibration example in the user payload is calibration for the named project and box, not a filename rule and not an answer-key extract. '
+            'Inspect every authorized image. Do not copy an example when the images disagree, and do not close an item only because its folder has ended.\n\n'
+            + prompt_text
+            + '\n\n'
+            + '\n\n'.join(references)
+            + '\n\n'
+            + OUTPUT_SCHEMA
+        )
+        prior = context.get('prior_open_item') if isinstance(context, dict) else None
+        prior_text = 'None' if prior in (None, '', 'None') else str(prior)
+        existing = []
+        if isinstance(context, dict) and prior_text != 'None':
+            existing = context.get('existing_open_record') or context.get('prior_open_item_context') or []
+        payload = {
+            'job_id': job,
+            'batch_id': batch,
+            'project': context.get('project') if isinstance(context, dict) else '',
+            'run_context': context.get('run_context') if isinstance(context, dict) else [],
+            'batch_queue_row': context.get('batch_queue_row') if isinstance(context, dict) else {},
+            'manifest': context.get('manifest') if isinstance(context, dict) else [],
+            'prior_open_item': prior_text,
+            'prior_open_item_source': (context.get('prior_open_item_source') if isinstance(context, dict) else '') or 'Batch Queue Prior Open Item',
+            'existing_open_record': existing,
+            'prior_open_item_context': existing,
+            'project_classification_rules': rules,
+            'authorized_project_state': context.get('authorized_project_state') if isinstance(context, dict) else {},
+            'approved_project_reference': approved,
+            'folder_code': context.get('folder_code') if isinstance(context, dict) else '',
+            'authorized_filenames': [s.name for s in sources],
+        }
+        start = time.monotonic()
+        response_meta = {}
+        attempt = int(getattr(context, 'attempt', 0) or 0) if not isinstance(context, dict) else int(context.get('inspection_attempt', 0) or 0)
+        max_tokens = getattr(self.settings, 'openai_max_output_tokens', 0)
+        effort = (getattr(self.settings, 'openai_reasoning_effort', '') or '').strip()
+        prompt_ids = [prompt_name, *doc_names]
+        if reference_id:
+            prompt_ids.append(reference_id)
+        self.diagnostics.write(
+            job, batch, attempt, 'request_prepared',
+            model=self.settings.openai_model,
+            reasoning_effort=effort,
+            max_output_tokens=max_tokens,
+            source_image_count=len(sources),
+            authorized_filenames=[s.name for s in sources],
+            prior_open_item=prior_text,
+            prior_open_item_source=payload['prior_open_item_source'],
+            prompt_identifiers=prompt_ids,
+            reference_id=reference_id,
+            reference_version=reference_version,
+            image_preparation=modes,
+            prompt_character_count=len(instruction),
+            rules_count=len(rules),
+        )
+        try:
+            request = {
+                'model': self.settings.openai_model,
+                'input': [
+                    {'role': 'system', 'content': instruction},
+                    {'role': 'user', 'content': [{'type': 'input_text', 'text': json.dumps(payload)}] + images},
+                ],
+                'text_format': InspectionOutput,
+            }
+            if max_tokens:
+                request['max_output_tokens'] = max_tokens
+            if effort:
+                request['reasoning'] = {'effort': effort}
+            response = self.client.responses.parse(**request)
             usage = getattr(response, 'usage', None)
             details = getattr(usage, 'input_tokens_details', None)
             response_meta = {
@@ -101,36 +196,67 @@ class Inspector:
                 'cached_input_tokens': getattr(details, 'cached_tokens', 0) if details else 0,
                 'output_tokens': getattr(usage, 'output_tokens', 0) if usage else 0,
             }
-            output=response.output_parsed
+            response_meta['estimated_cost_usd'] = _estimate_cost(
+                self.settings,
+                int(response_meta['input_tokens'] or 0),
+                int(response_meta['cached_input_tokens'] or 0),
+                int(response_meta['output_tokens'] or 0),
+            )
+            output = response.output_parsed
             returned_assets = [a.digital_asset for a in output.assets] if output else []
             returned_records = [r.proposed_record_id for r in output.records] if output else []
-            self.diagnostics.write(job, batch, attempt, 'response_received', **response_meta,
-                                   returned_asset_filenames=returned_assets,
-                                   returned_record_ids=returned_records)
-            if output is None: raise ValueError('Missing structured output')
-            expected=[s.name for s in sources]
-            actual=[a.digital_asset for a in output.assets]
+            self.diagnostics.write(
+                job, batch, attempt, 'response_received', **response_meta,
+                returned_asset_filenames=returned_assets,
+                returned_record_ids=returned_records,
+            )
+            if output is None:
+                raise ValueError('Missing structured output')
+            expected = [s.name for s in sources]
+            actual = [a.digital_asset for a in output.assets]
             if actual != expected:
-                missing=sorted(set(expected)-set(actual)); extra=sorted(set(actual)-set(expected))
-                self.diagnostics.write(job, batch, attempt, 'inspection_validation_failed',
-                                       reason='filename_integrity', expected_count=len(expected),
-                                       returned_count=len(actual), missing=missing, extra=extra,
-                                       expected_order=expected, returned_order=actual)
-                raise ValueError(f'Inspection returned incomplete/non-ordered staging: expected {len(expected)} assets, got {len(actual)}; missing={missing[:5]}; extra={extra[:5]}')
-            if len(output.records)==0:
+                missing = sorted(set(expected) - set(actual))
+                extra = sorted(set(actual) - set(expected))
+                self.diagnostics.write(
+                    job, batch, attempt, 'inspection_validation_failed',
+                    reason='filename_integrity', expected_count=len(expected),
+                    returned_count=len(actual), missing=missing, extra=extra,
+                    expected_order=expected, returned_order=actual,
+                )
+                raise ValueError(
+                    f'Inspection returned incomplete/non-ordered staging: expected {len(expected)} assets, got {len(actual)}; missing={missing[:5]}; extra={extra[:5]}'
+                )
+            if len(output.records) == 0:
                 self.diagnostics.write(job, batch, attempt, 'inspection_validation_failed', reason='no_record_rows')
                 raise ValueError('Inspection returned no Record Staging rows')
-            linked={a.assigned_record_id for a in output.assets}
-            proposed={r.proposed_record_id for r in output.records}
+            linked = {a.assigned_record_id for a in output.assets}
+            proposed = {r.proposed_record_id for r in output.records}
             if not all(a.assigned_record_id for a in output.assets) or not linked.issubset(proposed):
-                self.diagnostics.write(job, batch, attempt, 'inspection_validation_failed', reason='unlinked_assets',
-                                       linked_record_ids=sorted(linked), returned_record_ids=sorted(proposed))
+                self.diagnostics.write(
+                    job, batch, attempt, 'inspection_validation_failed', reason='unlinked_assets',
+                    linked_record_ids=sorted(linked), returned_record_ids=sorted(proposed),
+                )
                 raise ValueError('Every inspected asset must link to a returned Record Staging row')
-            self.diagnostics.write(job, batch, attempt, 'inspection_validated', elapsed_seconds=round(time.monotonic()-start, 2))
-            return output,{'input_tokens':response_meta['input_tokens'],'cached_input_tokens':response_meta['cached_input_tokens'] or 0,'output_tokens':response_meta['output_tokens'],'elapsed_seconds':round(time.monotonic()-start,2),'response_id':response_meta['response_id']}
+            elapsed = round(time.monotonic() - start, 2)
+            self.diagnostics.write(
+                job, batch, attempt, 'inspection_validated',
+                elapsed_seconds=elapsed,
+                success=True,
+                image_preparation=modes,
+                estimated_cost_usd=response_meta['estimated_cost_usd'],
+                response_id=response_meta['response_id'],
+            )
+            usage_out = {
+                'input_tokens': response_meta['input_tokens'],
+                'cached_input_tokens': response_meta['cached_input_tokens'] or 0,
+                'output_tokens': response_meta['output_tokens'],
+                'elapsed_seconds': elapsed,
+                'response_id': response_meta['response_id'],
+                'estimated_cost_usd': response_meta['estimated_cost_usd'],
+            }
+            return output, usage_out
         except Exception as e:
-            # API failures can be ambiguous. Caller checks staging before another attempt.
-            setattr(e,'elapsed_seconds',round(time.monotonic()-start,2))
+            setattr(e, 'elapsed_seconds', round(time.monotonic() - start, 2))
             if response_meta:
                 setattr(e, 'inspection_usage', {
                     'input_tokens': response_meta.get('input_tokens') or 0,
@@ -138,10 +264,21 @@ class Inspector:
                     'output_tokens': response_meta.get('output_tokens') or 0,
                     'response_id': response_meta.get('response_id') or '',
                     'elapsed_seconds': getattr(e, 'elapsed_seconds', 0),
+                    'estimated_cost_usd': response_meta.get('estimated_cost_usd') or 0,
                 })
             try:
-                path=self.diagnostics.write(job, batch, attempt, 'inspection_error', error_type=type(e).__name__,
-                                            error=str(e), elapsed_seconds=getattr(e, 'elapsed_seconds', 0))
+                path = self.diagnostics.write(
+                    job, batch, attempt, 'inspection_error',
+                    error_type=type(e).__name__,
+                    error=str(e),
+                    elapsed_seconds=getattr(e, 'elapsed_seconds', 0),
+                    success=False,
+                    image_preparation=modes,
+                    prior_open_item_source=payload['prior_open_item_source'],
+                    prompt_identifiers=prompt_ids,
+                    estimated_cost_usd=(response_meta or {}).get('estimated_cost_usd', 0),
+                    response_id=(response_meta or {}).get('response_id', ''),
+                )
                 setattr(e, 'diagnostics_path', str(path))
             except Exception:
                 pass

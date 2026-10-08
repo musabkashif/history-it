@@ -1,12 +1,13 @@
 # Acceptance testing
 
-1. Create a clean copy of `Tri Delta Chapters Production Register - Developer Test` and share it with the service account.
-2. Put the client governing packet in `GOVERNING_DOCS_DIR`.
-3. Create a small `HistoryIT Jobs` tab and an `OpenAI Usage` tab (the service can create these tabs before job creation if your Sheets adapter is extended).
-4. Set `GOOGLE_APPLICATION_CREDENTIALS`, `JOB_INDEX_SPREADSHEET_ID`, `OPENAI_API_KEY`, `OPENAI_MODEL`, pricing and limits.
-5. `uvicorn app.main:app --reload`; create a job with Box 19/F01 folder ID and start it.
-6. Monitor `/api/jobs/{id}`, `/batches`, `/usage`, and `/validation`. Interrupt the process after staging or after commit writes, restart, and verify no duplicate rows.
-7. Run `/api/benchmark/compare` against the read-only Frozen Benchmark. Expected completed Box 19 totals are 293 assets, 91 Odyssey records, 6 Metadata Only, 79 Ready, 12 Blocked-Cropping/QC, 280 logical components and 77 production tasks; the endpoint compares detail keys and counts rather than hardcoding them.
-8. After Box 19 is validated, use the Box 30 folder and a new job.
-
-No real Google/OpenAI acceptance execution was possible without the client's credentials and missing governing packet.
+1. Create a clean copy of `Tri Delta Chapters Production Register - Developer Test` and share it with the service account as Editor.
+2. On that clean copy, set Continuation State `Open Intellectual Item` and `Unresolved Boundary Item` to `None`. Asset QC, Itemization, and Metadata References must have no data rows. Do not clear a contradictory production register by hand inside the service; fix the copy, then start.
+3. Put the client governing packet in `GOVERNING_DOCS_DIR`. Keep `Runtime_prompt_old_chatgpt.md` at `RUNTIME_PROMPT_PATH`. The F01 calibration example is `project_references/tri-delta-chapters-f01-calibration.json`. Do not add unapproved answer files or Frozen Benchmark rows to `PROJECT_REFERENCES_DIR`.
+4. Set `GOOGLE_APPLICATION_CREDENTIALS`, `JOB_INDEX_SPREADSHEET_ID`, `OPENAI_API_KEY`, `OPENAI_MODEL`, pricing, and limits.
+5. Start the API and create one job for the Box 19/F01 folder. Use a batch size that covers the authorized F01 manifest. The first Batch Queue row must say `Prior Open Item = None`. Do not create a second job for F02.
+6. Start the job. The service reads Run Context, uses that batch's exact manifest, sends the calibration example to inspection, and sends original Drive images when they fit the API limits. A contradiction of the approved F01 example stops before commit and does not rewrite staging.
+7. Monitor `/api/jobs/{id}`, `/batches`, `/usage`, and `/validation`. A failed inspection writes `./logs/HIT-..._attempt-....json` and puts that path in Batch Queue `Error / Retry Note`. The log records `reference_id` and `reference_version`.
+8. F01 calibrated regression: after F01 commits, the letter is Review / Medium / Open, with no production tasks. F01's folder summary may be `Completed - Validated` while that intellectual item stays open. `Committed - Validated` means that batch's source count, staging, and readback passed. Check this intermediate state with `POST /api/benchmark/f01-checkpoint` and body `{"spreadsheet_id":"DEVELOPER_ID"}`. A correct register returns `outcome=f01_intermediate_match`, `matches=true`, `final_box19_match=false`, and actual counts assets 21, metadata_only_references 2, normal_records 3, ready_records 2, review_open_letters 1, production_tasks 0.
+9. F02–F06 Box 19 acceptance: after F01 is `Committed - Validated`, call `POST /api/jobs/{job_id}/folders` with `{"source_folder_id":"F02_FOLDER_ID"}`. That queues F02 on the same job and does not start inspection. Then call `/start`. The new batch's Prior Open Item is the F01 letter's record ID. F02 receives that record and its committed F01 assets, and inspects only the authorized F02 manifest. The first F02 images decide continuation or closure. Repeat the folders call for each later folder only after the previous batches are validated. Do not treat F01 alone as Box 19 acceptance.
+10. Frozen comparison: `POST /api/benchmark/compare` is read-only and remains the final Box 19 comparison. A correct F01-only Review/Open register compared with the Frozen Benchmark, including with `"folder": "F01"`, is `semantic_benchmark_mismatch` because the frozen letter is the final Ready/Closed state after F02. Do not treat that result as the F01 checkpoint, and do not call it an exact final-workbook match. Whole-workbook `exact_match` applies after F01–F06 have been processed.
+11. After Box 19 is validated, use the Box 30 folder and a new job. The F01 calibration example is not loaded for other projects or for later Box 19 folders.
