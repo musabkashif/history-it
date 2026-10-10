@@ -1,8 +1,16 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
 import { Check, ChevronDown, CircleAlert, Info, Loader2, X } from 'lucide-react'
 
-export function Button({ tone = 'secondary', loading, children, className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { tone?: 'primary'|'secondary'|'ghost'|'danger'; loading?: boolean }) {
-  return <button className={`btn-${tone} ${className}`} disabled={loading || props.disabled} {...props}>{loading && <Loader2 className="h-4 w-4 animate-spin" />}{children}</button>
+const buttonTones = {
+  primary: 'bg-cyan text-[#062126] enabled:hover:bg-[#8af1ed] enabled:active:bg-[#4fd9d4] focus-visible:ring-cyan/50',
+  secondary: 'border border-line bg-[#122237] text-slate-200 enabled:hover:border-cyan/40 enabled:hover:bg-[#172a42] enabled:active:bg-[#1c3352] focus-visible:ring-cyan/30',
+  ghost: 'text-slate-300 enabled:hover:bg-white/5 enabled:hover:text-white enabled:active:bg-white/10 focus-visible:ring-white/20',
+  danger: 'border border-rose/30 bg-rose/10 text-rose-200 enabled:hover:bg-rose/20 enabled:active:bg-rose/25 focus-visible:ring-rose/40',
+} as const
+
+export function Button({ tone = 'secondary', loading = false, disabled, className = '', type = 'button', children, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { tone?: keyof typeof buttonTones; loading?: boolean }) {
+  const isDisabled = Boolean(disabled || loading)
+  return <button {...props} type={type} disabled={isDisabled} aria-busy={loading || undefined} className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition duration-150 focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50 ${buttonTones[tone]} ${className}`}>{loading && <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />}{children}</button>
 }
 export function Badge({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'success'|'warning'|'danger'|'info'|'neutral' }) {
   const map = { success: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300', warning: 'border-amber/25 bg-amber/10 text-amber', danger: 'border-rose/25 bg-rose/10 text-rose-200', info: 'border-cyan/20 bg-cyan/10 text-cyan', neutral: 'border-slate-600/50 bg-slate-700/20 text-slate-300' }

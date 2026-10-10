@@ -1,18 +1,8 @@
 import type { BatchesResponse, CheckpointResponse, CompareResponse, Health, JobForm, JobState, UsageResponse, ValidationResponse } from './types'
 
-const storedBase = localStorage.getItem('historyit.apiBase')
-const storedToken = localStorage.getItem('historyit.apiToken')
-
 export const config = {
-  baseUrl: (import.meta.env.VITE_API_BASE_URL || storedBase || '').replace(/\/$/, ''),
-  token: import.meta.env.VITE_API_TOKEN || storedToken || '',
-}
-
-export function updateApiConfig(baseUrl: string, token: string) {
-  config.baseUrl = baseUrl.replace(/\/$/, '')
-  config.token = token
-  localStorage.setItem('historyit.apiBase', config.baseUrl)
-  if (token) localStorage.setItem('historyit.apiToken', token); else localStorage.removeItem('historyit.apiToken')
+  baseUrl: (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, ''),
+  token: import.meta.env.VITE_API_TOKEN || '',
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -22,7 +12,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (config.token) headers.set('X-API-Token', config.token)
   let response: Response
   try { response = await fetch(`${config.baseUrl}${path}`, { ...init, headers }) }
-  catch { throw new Error(`Could not reach the HistoryIT API at ${config.baseUrl}. Start the backend or switch to Preview mode.`) }
+  catch { throw new Error('Could not reach the archive service.') }
   const text = await response.text()
   let data: unknown = null
   try { data = text ? JSON.parse(text) : null } catch { data = text }

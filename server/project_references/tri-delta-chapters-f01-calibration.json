@@ -1,0 +1,113 @@
+{
+  "reference_id": "tri-delta-chapters-box19-f01-calibration",
+  "version": "2026-10-07.1",
+  "material_class": "client-approved-calibration-example",
+  "approval": "client-approved",
+  "not_an_executable_rule": true,
+  "project": "Tri Delta Chapters",
+  "box": "Chapters Box 19",
+  "applies_to_folders": ["F01", "F02"],
+  "statement": "CLIENT-APPROVED CALIBRATION EXAMPLE for Tri Delta Chapters, Chapters Box 19, folders F01 and F02. These are already-decided calibration examples, not filename-specific hard-coded rules and not an instruction to skip inspection. Inspect every authorized image. Use an example only when the visual evidence agrees. If the images disagree, follow the images and explain the evidence. A folder boundary does not force closure. Genuinely unresolved ambiguities go to human Review rather than being guessed. The first authorized images of the next folder decide whether an open item continues or closes.",
+  "examples": [
+    {
+      "example_id": "f01-folder-context",
+      "label": "Client-approved calibration example, not an executable filename rule",
+      "filenames": ["TriDelta_Year2_Chapters_Box19_F01_001.jpg"],
+      "reasoning": "001 is a folder or context capture. It documents the enclosure rather than an Odyssey intellectual item, so it is a Metadata Only folder/context reference.",
+      "outcome": {
+        "record_kind": "Metadata Only",
+        "template": "Metadata Only",
+        "type": "",
+        "reference_role": "Folder / Context",
+        "metadata_readiness": "Metadata Reference",
+        "boundary_state": "Closed",
+        "production_tasks": "none"
+      }
+    },
+    {
+      "example_id": "f01-descriptive-reference",
+      "label": "Client-approved calibration example, not an executable filename rule",
+      "filenames": [
+        "TriDelta_Year2_Chapters_Box19_F01_002.jpg",
+        "TriDelta_Year2_Chapters_Box19_F01_003.jpg"
+      ],
+      "reasoning": "002 and 003 are one Metadata Only descriptive reference sheet and its blank verso. The blank verso stays with the sheet. They are not an Odyssey record.",
+      "outcome": {
+        "record_kind": "Metadata Only",
+        "template": "Metadata Only",
+        "type": "",
+        "reference_role": "Descriptive Reference",
+        "metadata_readiness": "Metadata Reference",
+        "boundary_state": "Closed",
+        "production_tasks": "none"
+      }
+    },
+    {
+      "example_id": "f01-report",
+      "label": "Client-approved calibration example, not an executable filename rule",
+      "filenames": [
+        "TriDelta_Year2_Chapters_Box19_F01_004.jpg",
+        "TriDelta_Year2_Chapters_Box19_F01_005.jpg",
+        "TriDelta_Year2_Chapters_Box19_F01_006.jpg",
+        "TriDelta_Year2_Chapters_Box19_F01_007.jpg",
+        "TriDelta_Year2_Chapters_Box19_F01_008.jpg",
+        "TriDelta_Year2_Chapters_Box19_F01_009.jpg",
+        "TriDelta_Year2_Chapters_Box19_F01_010.jpg",
+        "TriDelta_Year2_Chapters_Box19_F01_011.jpg",
+        "TriDelta_Year2_Chapters_Box19_F01_012.jpg",
+        "TriDelta_Year2_Chapters_Box19_F01_013.jpg"
+      ],
+      "reasoning": "004 through 013 are one intellectual item: five typed report pages and five blank versos. Each blank verso stays with its typed page. The item is a Document / Report and the supplied pages support Ready / High. No production task is indicated.",
+      "outcome": {
+        "record_kind": "Normal Odyssey",
+        "template": "Document",
+        "type": "Report",
+        "metadata_readiness": "Ready",
+        "confidence": "High",
+        "boundary_state": "Closed",
+        "production_tasks": "none"
+      }
+    },
+    {
+      "example_id": "f01-list",
+      "label": "Client-approved calibration example, not an executable filename rule",
+      "filenames": [
+        "TriDelta_Year2_Chapters_Box19_F01_014.jpg",
+        "TriDelta_Year2_Chapters_Box19_F01_015.jpg"
+      ],
+      "reasoning": "014 and 015 are one intellectual item: a roster and its blank verso. The item is a Document / List and the supplied pages support Ready / High. No production task is indicated.",
+      "outcome": {
+        "record_kind": "Normal Odyssey",
+        "template": "Document",
+        "type": "List",
+        "metadata_readiness": "Ready",
+        "confidence": "High",
+        "boundary_state": "Closed",
+        "production_tasks": "none"
+      }
+    },
+    {
+      "example_id": "f01-letter",
+      "label": "Client-approved calibration example, not an executable filename rule",
+      "filenames": [
+        "TriDelta_Year2_Chapters_Box19_F01_016.jpg",
+        "TriDelta_Year2_Chapters_Box19_F01_017.jpg",
+        "TriDelta_Year2_Chapters_Box19_F01_018.jpg",
+        "TriDelta_Year2_Chapters_Box19_F01_019.jpg",
+        "TriDelta_Year2_Chapters_Box19_F01_020.jpg",
+        "TriDelta_Year2_Chapters_Box19_F01_021.jpg"
+      ],
+      "reasoning": "016 through 021 are one intellectual item: three typed letter pages and three blank versos. The item is Correspondence / Letter. F01 does not conclusively establish its end, so the F01 checkpoint is Review / Medium / Open. No production task is indicated. The first authorized images of F02 determine whether this same record continues or closes. Do not close it merely because F01 has ended, and do not duplicate the record or its already committed assets.",
+      "continuation": "After F01, the next Batch Queue Prior Open Item is this letter. F02 inspection receives the existing record and its committed assets, inspects only the authorized F02 manifest, and decides continuation or closure from those images.",
+      "outcome": {
+        "record_kind": "Normal Odyssey",
+        "template": "Correspondence",
+        "type": "Letter",
+        "metadata_readiness": "Review",
+        "confidence": "Medium",
+        "boundary_state": "Open",
+        "production_tasks": "none"
+      }
+    }
+  ]
+}

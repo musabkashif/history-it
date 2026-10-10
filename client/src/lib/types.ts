@@ -1,4 +1,3 @@
-export type Mode = 'api' | 'preview'
 export type JobStatus = string
 
 export interface Health { status: string; service?: string; configured?: boolean; diagnostics_build?: string }

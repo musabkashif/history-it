@@ -2,7 +2,7 @@
 
 A production-ready React + TypeScript + Tailwind operator console for the HistoryIT Archive Itemization Automation MVP.
 
-The interface is built against the current FastAPI routes in the supplied backend. It does not contain Google, OpenAI, or service-account credentials. It supports a safe Preview workspace for client demos before the backend is deployed, and a real API mode for running against your local FastAPI service.
+The interface loads live archive data from the backend. It does not contain Google, OpenAI, or service-account credentials, and it does not include sample or preview data.
 
 ## Run it locally
 
@@ -13,14 +13,14 @@ npm run dev
 
 Open `http://localhost:5173`.
 
-By default the app starts in **Preview mode**, which lets you demonstrate the UI with safe sample results. Go to **Settings → API mode** when the backend is running. If `VITE_API_BASE_URL` is blank, the Vite development proxy sends `/health` and `/api/*` to `http://localhost:8000`.
-
-For a different backend URL, create `.env.local`:
+The app always calls the backend. Set the address in `.env` (see `.env.example`):
 
 ```env
-VITE_API_BASE_URL=http://localhost:8000
+VITE_API_BASE_URL=http://127.0.0.1:8000
 VITE_API_TOKEN=
 ```
+
+If `VITE_API_BASE_URL` is blank during local development, the Vite proxy sends `/health` and `/api/*` to `http://localhost:8000`.
 
 Do not commit `.env.local` or any secret.
 
@@ -43,7 +43,7 @@ For a deployed static frontend, set `VITE_API_BASE_URL` to the hosted FastAPI or
 - Run the read-only F01 calibration checkpoint.
 - Run the read-only final Frozen Benchmark comparison with folder scope support.
 - Review classified controlled, free-text, administrative, and distinction-only differences.
-- Use Preview mode for a Loom/demo walkthrough without making backend calls.
+- The console shows only data returned by the backend.
 
 ## Backend contract used
 
@@ -64,6 +64,6 @@ For a deployed static frontend, set `VITE_API_BASE_URL` to the hosted FastAPI or
 
 ## Safe operating behavior
 
-The UI keeps preview results visibly separate from API results. The frontend does not enumerate Drive folders itself, write Google Sheets, modify benchmark workbooks, or start an inspection during job creation or folder authorization. Those rules remain enforced by the backend.
+The frontend does not enumerate Drive folders itself, write Google Sheets, modify benchmark workbooks, or start an inspection during job creation or folder authorization. Those rules remain enforced by the backend.
 
-The API token is held in browser local storage only when entered in Settings and is sent as `X-API-Token`. For production, use HTTPS and a deployment setup appropriate for the client’s security policy.
+If `VITE_API_TOKEN` is set, the console sends it as `X-API-Token`. For production, use HTTPS and a deployment setup appropriate for the client’s security policy.

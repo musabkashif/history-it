@@ -1,0 +1,16 @@
+# Secrets and machine-local config
+.env
+**/.env
+credentials/
+
+# Dependencies and local environments
+node_modules/
+.venv/
+dist/
+.vite/
+
+# Python caches and runtime logs
+__pycache__/
+.pytest_cache/
+*.py[cod]
+logs/
