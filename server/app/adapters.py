@@ -72,6 +72,8 @@ class Drive:
                 elif f['mimeType'] in IMAGE_MIME:
                     out.append(Source(id=f['id'],name=f['name'],folder_id=fid,folder_name=path.rsplit('/',1)[-1] or fid,path=path+'/'+f['name'],mime_type=f['mimeType']))
         out.sort(key=lambda s:(s.path,s.id))
+        from app.box_folders import select_authorized_sources
+        out = select_authorized_sources(out)
         if len({s.name for s in out})!=len(out): raise ValueError('Duplicate source filename across folder hierarchy; cannot reconcile Asset QC by filename')
         return out
 

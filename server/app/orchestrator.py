@@ -1,6 +1,7 @@
 from __future__ import annotations
 import hashlib,json,threading,time
 from collections import defaultdict
+from app.box_folders import select_authorized_sources
 from app.models import Source
 from app.commit import CommitService
 from app.credits import CreditShortageError, credit_alert
@@ -56,7 +57,7 @@ class Orchestrator:
         # A new job is a clean project start. Do not list Drive until that check passes,
         # so a later folder is not enumerated by a second create call.
         initial_queue_prior(self._continuation(req.spreadsheet_id,'Open Intellectual Item'),self._continuation(req.spreadsheet_id,'Unresolved Boundary Item'),self.sheets.rows(req.spreadsheet_id,'Asset QC'),self.sheets.rows(req.spreadsheet_id,'Itemization'),self.sheets.rows(req.spreadsheet_id,'Metadata References'))
-        sources=self.drive.enumerate(req.source_folder_id)
+        sources=select_authorized_sources(self.drive.enumerate(req.source_folder_id))
         if not sources:raise ValueError('Authorized folder contains no images')
         existing={r.get('Digital Asset') for r in self.sheets.rows(req.spreadsheet_id,'Asset QC')}
         if existing & {s.name for s in sources}:raise ValueError('Authorized sources already exist in Asset QC')
@@ -87,7 +88,7 @@ class Orchestrator:
             raise ValueError('Job is still running. Authorize the next folder after it stops.')
         if any(row.get('Batch Status')!='Committed - Validated' for row in rows):
             raise ValueError('Existing batches are not Committed - Validated. Refusing to enumerate or queue the next folder.')
-        sources=self.drive.enumerate(req.source_folder_id)
+        sources=select_authorized_sources(self.drive.enumerate(req.source_folder_id))
         if not sources:raise ValueError('Authorized folder contains no images')
         known=set()
         for row in rows:known.update(self._manifest_names(row))
