@@ -10,7 +10,7 @@ const buttonTones = {
 
 export function Button({ tone = 'secondary', loading = false, disabled, className = '', type = 'button', children, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { tone?: keyof typeof buttonTones; loading?: boolean }) {
   const isDisabled = Boolean(disabled || loading)
-  return <button {...props} type={type} disabled={isDisabled} aria-busy={loading || undefined} className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition duration-150 focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50 ${buttonTones[tone]} ${className}`}>{loading && <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />}{children}</button>
+  return <button {...props} type={type} disabled={isDisabled} aria-busy={loading || undefined} className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition duration-150 focus-visible:outline-none focus-visible:ring-2 ${loading ? 'cursor-wait disabled:cursor-wait' : 'disabled:cursor-not-allowed disabled:opacity-50'} ${buttonTones[tone]} ${className}`}>{loading && <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />}{children}</button>
 }
 export function Badge({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'success'|'warning'|'danger'|'info'|'neutral' }) {
   const map = { success: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300', warning: 'border-amber/25 bg-amber/10 text-amber', danger: 'border-rose/25 bg-rose/10 text-rose-200', info: 'border-cyan/20 bg-cyan/10 text-cyan', neutral: 'border-slate-600/50 bg-slate-700/20 text-slate-300' }
