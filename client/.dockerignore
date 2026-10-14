@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.vite/
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+*.md
+Dockerfile
+.dockerignore
+.vscode/

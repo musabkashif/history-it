@@ -4,6 +4,7 @@ from collections import Counter
 from datetime import date
 from dataclasses import asdict
 from client_reference.commit_engine import plan_commit, calculate_metrics, split_assets, CommitError
+from app.vocabulary import unresolved_material_review
 
 DETAIL=('Asset QC','Itemization','Metadata References','Production Queue','Ready for Metadata')
 KEYS={'Asset QC':'Digital Asset','Itemization':'Item ID','Metadata References':'Reference ID','Production Queue':'Task ID','Ready for Metadata':'Item ID'}
@@ -109,6 +110,7 @@ class CommitService:
             '13 Carry-forward tasks':all(any(x['Task ID']==r['Task ID'] and self.same(x,r) for x in current['Production Queue']) for r in before['Production Queue']),
             '14 Continuation state':not already or self.sheets.field(sid,'Open Intellectual Item')==plan.resulting_open_item,
             '15 Commit/readback':all(self._equal(current[s],expected[s],KEYS[s]) for s in DETAIL),
+            '16 Unresolved classification review':not any(unresolved_material_review(record) for record in (records or [])),
         }
         if not all(checks.values()):
             failed=[k for k,v in checks.items() if not v]

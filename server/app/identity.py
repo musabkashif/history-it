@@ -101,7 +101,8 @@ def _stamp(row, batch, folder):
 NO_QUEUE = frozenset({'no adjustment', 'n/a', 'review'})
 QUEUE = frozenset({
     'crop / recrop', 'deskew', 'rotate', 'split spread', 'split spread + publication crop',
-    'publication crop', 'archival border crop', 'create derivative crop', 'reshoot',
+    'publication crop', 'archival border crop', 'create derivative crop',
+    'crop / recrop + create derivative crop', 'reshoot',
     'additional imaging required', 'additional imaging',
 })
 

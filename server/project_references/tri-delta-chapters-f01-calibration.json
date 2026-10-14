@@ -7,6 +7,7 @@
   "project": "Tri Delta Chapters",
   "box": "Chapters Box 19",
   "applies_to_folders": ["F01", "F02"],
+  "scope_limit": "These examples are project calibration for Tri Delta Chapters Box 19 folders F01 and F02 only. They are separate from the standard workflow rules. They do not decide filenames in F03, F04, F05, or F06.",
   "statement": "CLIENT-APPROVED CALIBRATION EXAMPLE for Tri Delta Chapters, Chapters Box 19, folders F01 and F02. These are already-decided calibration examples, not filename-specific hard-coded rules and not an instruction to skip inspection. Inspect every authorized image. Use an example only when the visual evidence agrees. If the images disagree, follow the images and explain the evidence. A folder boundary does not force closure. Genuinely unresolved ambiguities go to human Review rather than being guessed. The first authorized images of the next folder decide whether an open item continues or closes.",
   "examples": [
     {

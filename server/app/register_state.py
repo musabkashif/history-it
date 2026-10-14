@@ -85,12 +85,41 @@ def range_matches(value, rows, sheet, end_column) -> bool:
     return bool(expected) and canon(value) == expected
 
 
-def next_unprocessed_source(queue_rows, done):
+def _queued_units(queue_rows):
+    units = []
+    for row in queue_rows:
+        unit = canon(row.get('Source Group / Folder'))
+        if unit and unit not in units:
+            units.append(unit)
+    return units
+
+
+def source_scope_closed(queue_rows, done, open_item) -> bool:
+    """True only when this job queued F01–F06, every batch validated, and nothing is open.
+
+    A parent authorization discovers those six folders. A smaller authorization
+    stays open because the box can still receive another folder.
+    """
+    from app.box_folders import BOX_FOLDERS
+
+    units = _queued_units(queue_rows)
+    if set(units) != set(BOX_FOLDERS) or not queue_rows:
+        return False
+    if any(canon(row.get('Batch Status')) != 'Committed - Validated' for row in queue_rows):
+        return False
+    if any(folder not in set(done) for folder in BOX_FOLDERS):
+        return False
+    return canon(open_item) in ('', 'None')
+
+
+def next_unprocessed_source(queue_rows, done, open_item='None'):
     for row in queue_rows:
         if canon(row.get('Batch Status')) != 'Committed - Validated':
             return canon(row.get('Start Filename'))
     if not done:
         return ''
+    if source_scope_closed(queue_rows, done, open_item):
+        return 'None - Chapters Box 19 source exhausted'
     if len(done) == 1:
         return f'None - {done[0]} source exhausted; next folder is not yet authorized'
     return 'None - authorized source exhausted (' + ', '.join(done) + '); next folder is not yet authorized'
@@ -123,10 +152,15 @@ def authorization_scope(queue_rows):
     return 'Batched - ' + '; '.join(parts) + '.'
 
 
-def resume_instruction(done, open_item):
+def resume_instruction(done, open_item, queue_rows=None):
     if not done:
         return ''
     listed = ', '.join(done)
+    if queue_rows is not None and source_scope_closed(queue_rows, done, open_item):
+        return (
+            f'Do not reprocess {listed}. No intellectual item is open. '
+            'Chapters Box 19 source processing is complete.'
+        )
     if open_item and open_item != 'None':
         return (
             f'Do not reprocess {listed}. Do not begin {done[0]} again and do not reappend its committed assets. '
@@ -227,7 +261,21 @@ def _batch_rows(rows, batch_id, key='Batch ID'):
     return [row for row in rows if canon(row.get(key)) == batch_id]
 
 
-def plan_reconciliation(queue_rows, folder_rows, asset_rows, record_rows, continuation_rows, box_rows):
+def box_status(queue_rows, done, open_item, item_rows=None) -> str:
+    """Close the box only after F01–F06 are validated, nothing is open, and no classification is unresolved.
+
+    Any smaller authorized set stays In Progress. A batch validation PASS is not
+    box completion. An empty queue is not a finished box. Unresolved Review is not completion.
+    """
+    from app.vocabulary import unresolved_material_review
+    if any(unresolved_material_review(row) for row in (item_rows or [])):
+        return 'In Progress'
+    if source_scope_closed(queue_rows, done, open_item):
+        return 'Completed - Validated'
+    return 'In Progress'
+
+
+def plan_reconciliation(queue_rows, folder_rows, asset_rows, record_rows, continuation_rows, box_rows, item_rows=None):
     """Classify derived writes. Inspection fields are not in the plan."""
     decisions = []
     batch_ids = {canon(row.get('Batch ID')) for row in queue_rows}
@@ -269,12 +317,26 @@ def plan_reconciliation(queue_rows, folder_rows, asset_rows, record_rows, contin
         'Box Summary', 'Completed - Validated Folders', desired_count, current_count, count_action,
         'Completed folder count is derived from Folder Processing Unit Summary',
     ))
+    status_current = canon(box_row.get('Box Status')) if box_row else ''
+    status_desired = box_status(queue_rows, done, open_item, item_rows)
+    if status_current == status_desired:
+        status_action = 'ok'
+    elif status_current in ('', 'In Progress') and status_desired == 'In Progress':
+        status_action = 'write' if status_current == '' else 'ok'
+    elif status_current == 'Completed - Validated' and status_desired == 'In Progress':
+        status_action = 'conflict'
+    else:
+        status_action = 'write' if status_current != status_desired else 'ok'
+    decisions.append(_decision(
+        'Box Summary', 'Box Status', status_desired, status_current, status_action,
+        'Box status is Completed - Validated only when F01 through F06 are validated and no intellectual item is open',
+    ))
 
     derived = {
         'Current Completed Processing Unit': completed_processing_unit(queue_rows, done),
-        'Next Authorized / Unprocessed Folder': next_unprocessed_source(queue_rows, done),
+        'Next Authorized / Unprocessed Folder': next_unprocessed_source(queue_rows, done, open_item),
         'Source Processing Authorization': authorization_scope(queue_rows),
-        'Resume Instruction': resume_instruction(done, open_item if open_item != 'None' else ''),
+        'Resume Instruction': resume_instruction(done, open_item if open_item != 'None' else '', queue_rows),
         'Last Closed Item': last_closed_item(record_rows, open_item if open_item != 'None' else ''),
     }
     stale = {
@@ -348,7 +410,8 @@ def reconcile_register(sheets, sid, job, queue_rows):
     record_rows = sheets.rows(sid, 'Record Staging')
     continuation_rows = sheets.rows(sid, 'Continuation State')
     box_rows = sheets.rows(sid, 'Box Summary')
-    decisions = plan_reconciliation(queue_rows, folder_rows, asset_rows, record_rows, continuation_rows, box_rows)
+    item_rows = sheets.rows(sid, 'Itemization')
+    decisions = plan_reconciliation(queue_rows, folder_rows, asset_rows, record_rows, continuation_rows, box_rows, item_rows)
     conflicts = [item for item in decisions if item['action'] == 'conflict']
     if conflicts:
         raise ReconciliationConflict([
@@ -363,7 +426,7 @@ def reconcile_register(sheets, sid, job, queue_rows):
             sheets.set_field(sid, item['field'], item['desired'])
         elif item['sheet'] == 'Box Summary':
             box = canon(queue_rows[-1].get('Box'))
-            sheets.write(sid, 'Box Summary', {'Box': box, 'Completed - Validated Folders': item['desired']}, ('Box', box))
+            sheets.write(sid, 'Box Summary', {'Box': box, item['field']: item['desired']}, ('Box', box))
         elif item['sheet'] == 'Batch Queue':
             batch_id = item['reason']
             sheets.write(sid, 'Batch Queue', {item['field']: item['desired']}, ('Batch ID', batch_id))
@@ -407,7 +470,7 @@ def _readback(sheets, sid, queue_rows, decisions):
             actual = _continuation_value(continuation, item['field'])
         elif item['sheet'] == 'Box Summary':
             row = next((candidate for candidate in box_rows if canon(candidate.get('Box')) == box), {})
-            actual = canon(row.get('Completed - Validated Folders'))
+            actual = canon(row.get(item['field']))
         else:
             batch = by_batch.get(item['reason'], {})
             actual = canon(batch.get(item['field']))

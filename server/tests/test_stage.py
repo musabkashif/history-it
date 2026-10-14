@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from client_reference.commit_engine import CommitError
+from app.inspection import _is_connection_error, inspect_resilient, merge_inspections
 from app.models import ASSET_HEADERS, RECORD_HEADERS, AssetRow, InspectionOutput, RecordRow
 from app.orchestrator import Orchestrator, unit_size
 
@@ -482,6 +483,80 @@ class StageControlTests(unittest.TestCase):
         with self.assertRaises(Denied):
             _execute(Lock(), lambda: Rejected(), sleep=lambda _seconds: None)
         self.assertEqual(denied, [1])
+
+
+def _source(name):
+    return type('Source', (), {'name': name})()
+
+
+def _output(names, record_id, boundary='Closed'):
+    assets = [AssetRow.model_validate(filled(ASSET_HEADERS, **{
+        'Digital Asset': name, 'Assigned Record ID': record_id,
+    })) for name in names]
+    record = RecordRow.model_validate(filled(RECORD_HEADERS, **{
+        'Proposed Record ID': record_id, 'Boundary State After Record': boundary,
+    }))
+    return InspectionOutput(assets=assets, records=[record])
+
+
+class ProviderSplitTests(unittest.TestCase):
+    def test_dns_failure_counts_as_a_connection_error(self):
+        import socket
+        self.assertTrue(_is_connection_error(socket.gaierror(11001, 'getaddrinfo failed')))
+
+    def test_provider_500_inspects_the_same_files_in_smaller_pieces(self):
+        calls = []
+
+        def once(sources, context):
+            names = [item.name for item in sources]
+            calls.append(names)
+            if len(names) > 2:
+                failure = RuntimeError('Error code: 500')
+                failure.status_code = 500
+                raise failure
+            piece = _output(names, 'item')
+            return piece, {'input_tokens': len(names), 'output_tokens': 1, 'response_id': names[0]}
+
+        output, usage = inspect_resilient(once, [_source(name) for name in ('a.jpg', 'b.jpg', 'c.jpg', 'd.jpg')], {'prior_open_item': 'None'})
+        self.assertEqual([asset.digital_asset for asset in output.assets], ['a.jpg', 'b.jpg', 'c.jpg', 'd.jpg'])
+        self.assertEqual(sorted(record.proposed_record_id for record in output.records), ['item', 'item~1'])
+        self.assertEqual(usage['input_tokens'], 4)
+        self.assertEqual(calls[0], ['a.jpg', 'b.jpg', 'c.jpg', 'd.jpg'])
+        self.assertEqual(calls[1:], [['a.jpg', 'b.jpg'], ['c.jpg', 'd.jpg']])
+
+    def test_one_rejected_image_is_not_split_again(self):
+        def once(sources, context):
+            failure = RuntimeError('Error code: 500')
+            failure.status_code = 500
+            raise failure
+
+        with self.assertRaisesRegex(RuntimeError, 'only.jpg'):
+            inspect_resilient(once, [_source('only.jpg')], {'prior_open_item': 'None'})
+
+    def test_open_record_at_the_split_continues_into_the_next_piece(self):
+        def once(sources, context):
+            names = [item.name for item in sources]
+            if len(names) > 2:
+                failure = RuntimeError('server')
+                failure.status_code = 500
+                raise failure
+            if names == ['a.jpg', 'b.jpg']:
+                return _output(names, 'open-1', boundary='Open'), {'input_tokens': 2, 'output_tokens': 1, 'response_id': 'left'}
+            self.assertEqual(context['prior_open_item'], 'open-1')
+            continued = _output(['c.jpg'], 'open-1', boundary='Closed')
+            other = _output(['d.jpg'], 'page')
+            return InspectionOutput(assets=continued.assets + other.assets, records=continued.records + other.records), {'input_tokens': 2, 'output_tokens': 1, 'response_id': 'right'}
+
+        output, _usage = inspect_resilient(once, [_source(name) for name in ('a.jpg', 'b.jpg', 'c.jpg', 'd.jpg')], {'prior_open_item': 'None'})
+        self.assertEqual([record.proposed_record_id for record in output.records], ['open-1', 'page'])
+        self.assertEqual([asset.assigned_record_id for asset in output.assets], ['open-1', 'open-1', 'open-1', 'page'])
+
+    def test_nested_splits_keep_every_renamed_record_id_unique(self):
+        first = merge_inspections([_output(['a.jpg'], 'R001'), _output(['b.jpg'], 'R001')])
+        combined = merge_inspections([first, _output(['c.jpg'], 'R001')])
+        ids = [record.proposed_record_id for record in combined.records]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual([asset.assigned_record_id for asset in combined.assets], ids)
 
 
 if __name__ == '__main__':

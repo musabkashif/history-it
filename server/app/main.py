@@ -23,6 +23,7 @@ def runtime():
  if _runtime:return _runtime
  if not settings.google_application_credentials or not settings.job_index_spreadsheet_id:
   raise RuntimeError('Set GOOGLE_APPLICATION_CREDENTIALS and JOB_INDEX_SPREADSHEET_ID')
+ os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = settings.google_application_credentials
  settings.validate_live()
  sheets=Sheets(); drive=Drive(); _runtime=Orchestrator(sheets,drive,Inspector(settings,drive),settings)
  return _runtime
@@ -130,6 +131,9 @@ def benchmark(req:BenchmarkRequest,x_api_token:str|None=Header(default=None)):
                 box=req.box,
                 folder=req.folder or '',
                 outcome=result.get('outcome'),
+                strict_outcome=result.get('strict_outcome'),
+                archival_outcome=result.get('archival_outcome'),
+                archival_matches=result.get('archival_matches'),
                 matches=result.get('matches'),
                 final_box19_match=result.get('final_box19_match'),
                 internally_consistent=result.get('internally_consistent'),

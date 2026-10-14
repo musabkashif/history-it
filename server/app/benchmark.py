@@ -292,6 +292,8 @@ def compare_workbooks(live, benchmark, box='', folder=''):
     folder_name = str(folder or '')
     explain = folder_name.upper() == 'F01' or _f01_letter_present(compared_live)
     confidence = _confidence_differences(compared_live, benchmark)
+    from app.archival import assess_archival
+    archival = assess_archival(live, benchmark, scoped=scoped)
     return {
         'box': box,
         'matches': exact,
@@ -319,6 +321,12 @@ def compare_workbooks(live, benchmark, box='', folder=''):
         'whole_workbook': not scoped,
         'final_box19_match': _final_box19(compared_live, exact, scoped),
         'f01_letter_transition': F01_LETTER_TRANSITION if explain else '',
+        'strict_outcome': outcome,
+        'archival_outcome': archival['outcome'],
+        'archival_matches': archival['matches'],
+        'archival_policy': archival['policy'],
+        'archival_differences': archival['differences'],
+        'archival_match': archival['match'],
     }
 
 

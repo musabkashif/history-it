@@ -5,7 +5,9 @@ from app.box_folders import select_authorized_sources
 from app.models import Source
 from app.commit import CommitService
 from app.credits import CreditShortageError, credit_alert
+from app.decisions import apply_governing_constraints
 from app.diagnostics import exception_chain
+from app.inspection import inspection_attempt_blocked, transient_inspection_failure
 from app.identity import assign_identity, folder_code
 from app.authorization import (
     BatchAuthorizationError, RegisterStateError, assert_batch_prior, assert_single_active_batch,
@@ -182,7 +184,10 @@ class Orchestrator:
                 r=matches[0]
                 if r['Batch Status'] not in ('Inspection Failed - Retryable','Commit Failed - Retryable','Blocked - Human Review'):
                     raise ValueError('Batch not retryable')
-                self.sheets.write(sid,'Batch Queue',{'Batch Status':'Inspection Complete - Awaiting Commit' if self._complete(sid,r) else 'Authorized / Pending Inspection','Validation Status':'Not Run','Error / Retry Note':''},('Batch ID',bid))
+                resumed = {'Batch Status':'Inspection Complete - Awaiting Commit' if self._complete(sid,r) else 'Authorized / Pending Inspection','Validation Status':'Not Run'}
+                if transient_inspection_failure(r.get('Error / Retry Note') or ''):
+                    resumed['Inspection Attempt'] = '0'
+                self.sheets.write(sid,'Batch Queue',resumed,('Batch ID',bid))
                 return self.start(r['Job ID'])
         raise KeyError(bid)
     def _complete(self,sid,b):
@@ -352,9 +357,9 @@ class Orchestrator:
                 if self.cost(sid,job)>=self.settings.job_spending_limit_usd:
                     self.sheets.write(sid,'Batch Queue',{'Batch Status':'Blocked - Human Review','Error / Retry Note':'Job spending limit reached'},('Batch ID',b['Batch ID']));return
                 attempt=int(float(b.get('Inspection Attempt') or 0))+1
-                if attempt>self.settings.max_retries:
+                if inspection_attempt_blocked(attempt, self.settings.max_retries, b.get('Error / Retry Note') or ''):
                     self.sheets.write(sid,'Batch Queue',{'Batch Status':'Blocked - Human Review','Error / Retry Note':'Inspection retry limit reached'},('Batch ID',b['Batch ID']));return
-                self.sheets.write(sid,'Batch Queue',{'Batch Status':'Inspection In Progress','Inspection Attempt':str(attempt)},('Batch ID',b['Batch ID']))
+                self.sheets.write(sid,'Batch Queue',{'Batch Status':'Inspection In Progress','Inspection Attempt':str(attempt),'Error / Retry Note':''},('Batch ID',b['Batch ID']))
                 context['inspection_attempt']=attempt
                 usage={}
                 try:
@@ -362,6 +367,7 @@ class Orchestrator:
                     if answer_problems:
                         raise ReferenceError(answer_problems[0])
                     output,usage=self.inspector.inspect(job,b['Batch ID'],sources,context,rules)
+                    output=apply_governing_constraints(output)
                     problems=reference_mismatches(output.assets,output.records,reference,[source.name for source in sources])
                     if problems:
                         raise ReferenceError('Staging was not changed. Calibration conflict: '+'; '.join(problems))

@@ -4,6 +4,7 @@ from pathlib import Path
 from app.credits import as_credit_error
 from app.diagnostics import Diagnostics, exception_chain
 from app.images import JPEG_QUALITY, ORIGINAL_MAX_BYTES, ORIGINAL_MAX_EDGE, RESIZE_MAX_EDGE, prepare_model_image
+from app.decisions import decision_instructions
 from app.models import InspectionOutput
 
 OUTPUT_SCHEMA = """Structured output schema only. This text does not decide record boundaries, record types, templates, or metadata readiness. Those judgments come from the client runtime prompt, the governing documents, the authorized images, and any client-approved calibration example in the user payload.
@@ -23,10 +24,152 @@ def _is_connection_error(exc):
         if 'APITimeoutError' not in names and names & {
             'APIConnectionError', 'ConnectError', 'ReadError', 'WriteError',
             'RemoteProtocolError', 'ConnectionError', 'ConnectionResetError',
+            'gaierror', 'TimeoutError',
         }:
             return True
         current = current.__cause__
+        if current is None and not exc.__suppress_context__:
+            current = getattr(exc, '__context__', None)
+            exc = current
     return False
+
+
+def provider_server_error(exc) -> bool:
+    """True when the provider failed the request and a smaller request may succeed."""
+    seen = set()
+    current = exc
+    while current is not None and id(current) not in seen and len(seen) < 8:
+        seen.add(id(current))
+        status = getattr(current, 'status_code', None)
+        if status in (500, 502, 503):
+            return True
+        names = {cls.__name__ for cls in type(current).__mro__}
+        if 'InternalServerError' in names:
+            return True
+        nxt = current.__cause__
+        if nxt is None and not current.__suppress_context__:
+            nxt = current.__context__
+        current = nxt
+    return False
+
+
+def transient_inspection_failure(note: str) -> bool:
+    """Network drops and provider HTTP 500s can be retried. They are not content failures."""
+    text = (note or '').lower()
+    return (
+        'getaddrinfo failed' in text
+        or 'connection error' in text
+        or 'error code: 500' in text
+        or 'server had an error processing your request' in text
+        or text.strip() == 'inspection retry limit reached'
+    )
+
+
+def inspection_attempt_blocked(attempt: int, max_retries: int, note: str) -> bool:
+    """Content failures stop at the cap. A transient failure stays retryable."""
+    if attempt <= max_retries:
+        return False
+    return not transient_inspection_failure(note)
+
+
+def _still_open(record) -> bool:
+    boundary = (record.boundary_state or '').casefold()
+    readiness = (record.metadata_readiness or '').casefold()
+    return boundary.startswith('open') or readiness == 'review'
+
+
+def continuation_context(context, output):
+    """Hand the open record at the end of one piece to the next piece of the same batch."""
+    copied = dict(context or {})
+    if not output.assets:
+        return copied
+    last_id = output.assets[-1].assigned_record_id
+    match = next((record for record in output.records if record.proposed_record_id == last_id and _still_open(record)), None)
+    if match is None:
+        return copied
+    copied['prior_open_item'] = last_id
+    copied['prior_open_item_source'] = 'Previous images in this batch'
+    detail = [match.model_dump(by_alias=True)]
+    copied['existing_open_record'] = detail
+    copied['prior_open_item_context'] = detail
+    return copied
+
+
+def merge_inspections(parts, continuation_ids=()):
+    """Keep manifest order. A continued record stays one row. Other id clashes stay distinct."""
+    continued = {item for item in continuation_ids if item and item != 'None'}
+    assets = []
+    records = []
+    seen = set()
+    for part_index, output in enumerate(parts):
+        remap = {}
+        for record in output.records:
+            local = record.proposed_record_id
+            if local in seen and local in continued:
+                records = [item for item in records if item.proposed_record_id != local]
+                records.append(record)
+                continue
+            if local in seen:
+                number = 1
+                renamed = f'{local}~{number}'
+                while renamed in seen:
+                    number += 1
+                    renamed = f'{local}~{number}'
+                remap[local] = renamed
+                record.proposed_record_id = renamed
+                local = renamed
+            seen.add(local)
+            records.append(record)
+        for asset in output.assets:
+            if asset.assigned_record_id in remap:
+                asset.assigned_record_id = remap[asset.assigned_record_id]
+            assets.append(asset)
+    return InspectionOutput(assets=assets, records=records)
+
+
+def merge_usage(parts):
+    combined = {
+        'input_tokens': 0,
+        'cached_input_tokens': 0,
+        'output_tokens': 0,
+        'elapsed_seconds': 0,
+        'estimated_cost_usd': 0,
+        'response_id': '',
+    }
+    ids = []
+    for part in parts:
+        for key in ('input_tokens', 'cached_input_tokens', 'output_tokens'):
+            combined[key] += int(part.get(key) or 0)
+        combined['elapsed_seconds'] += float(part.get('elapsed_seconds') or 0)
+        combined['estimated_cost_usd'] += float(part.get('estimated_cost_usd') or 0)
+        if part.get('response_id'):
+            ids.append(str(part['response_id']))
+    combined['elapsed_seconds'] = round(combined['elapsed_seconds'], 2)
+    combined['response_id'] = ','.join(ids)
+    return combined
+
+
+def inspect_resilient(inspect_once, sources, context, on_split=None):
+    """Inspect the authorized images. A provider HTTP 500 is retried in smaller pieces."""
+    try:
+        return inspect_once(sources, context)
+    except Exception as exc:
+        converted = as_credit_error(exc)
+        if converted is not exc:
+            raise converted from exc
+        if not provider_server_error(exc) or len(sources) < 2:
+            if provider_server_error(exc) and len(sources) == 1:
+                filename = getattr(sources[0], 'name', 'this image')
+                raise RuntimeError(f'OpenAI rejected {filename} with a server error. The other images in the batch can be inspected separately.') from exc
+            raise
+        if on_split is not None:
+            on_split(exc, sources)
+        midpoint = len(sources) // 2
+        left_output, left_usage = inspect_resilient(inspect_once, sources[:midpoint], context, on_split)
+        right_context = continuation_context(context, left_output)
+        right_output, right_usage = inspect_resilient(inspect_once, sources[midpoint:], right_context, on_split)
+        continued = right_context.get('prior_open_item')
+        return merge_inspections([left_output, right_output], [continued]), merge_usage([left_usage, right_usage])
 
 def _runtime_prompt(settings):
     configured = getattr(settings, 'runtime_prompt_path', None) or ''
@@ -126,6 +269,23 @@ class Inspector:
                 pass
 
     def inspect(self, job, batch, sources, context, rules):
+        def once(chosen, chosen_context):
+            return self._inspect_once(job, batch, chosen, chosen_context, rules)
+
+        def on_split(exc, chosen):
+            try:
+                self.diagnostics.write(
+                    job, batch, int((context or {}).get('inspection_attempt') or 0), 'provider_split',
+                    error_type=type(exc).__name__, error=str(exc)[:500],
+                    source_image_count=len(chosen),
+                    filenames=[getattr(source, 'name', '') for source in chosen],
+                )
+            except Exception:
+                pass
+
+        return inspect_resilient(once, sources, context, on_split)
+
+    def _inspect_once(self, job, batch, sources, context, rules):
         prompt_text, prompt_name = _runtime_prompt(self.settings)
         docs = Path(self.settings.governing_docs_dir)
         references = []
@@ -155,7 +315,7 @@ class Inspector:
         jpeg_quality = int(getattr(self.settings, 'image_jpeg_quality', JPEG_QUALITY) or JPEG_QUALITY)
         try:
             for src in sources:
-                raw = self.drive.image(src)
+                raw = self._call(job, batch, attempt, f'drive.image {src.name}', lambda src=src: self.drive.image(src))
                 if hasattr(raw, 'read'):
                     raw = raw.read()
                 source_bytes = len(raw) if isinstance(raw, (bytes, bytearray)) else None
@@ -195,6 +355,8 @@ class Inspector:
             + '\n\n'.join(references)
             + '\n\n'
             + OUTPUT_SCHEMA
+            + '\n\n'
+            + decision_instructions()
         )
         prior = context.get('prior_open_item') if isinstance(context, dict) else None
         prior_text = 'None' if prior in (None, '', 'None') else str(prior)

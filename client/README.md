@@ -27,11 +27,16 @@ Do not commit `.env.local` or any secret.
 ## Production build
 
 ```bash
+npm ci
 npm run build
 npm run preview
 ```
 
-For a deployed static frontend, set `VITE_API_BASE_URL` to the hosted FastAPI origin. The backend must allow the deployed frontend origin with CORS, or both applications must be served behind the same origin/reverse proxy. The frontend never proxies secrets or stores them in source code.
+Docker Compose production (`docker-compose.prod.yml` at the repo root) builds with `VITE_API_BASE_URL` empty so the browser uses the same origin; Nginx serves the static UI and proxies `/api` and `/health` to FastAPI.
+
+Authentication: set `API_TOKEN` on the backend and the same value as `VITE_API_TOKEN` for the frontend image build. The console sends `X-API-Token` on `/api` calls. Any `VITE_*` value is embedded in the JavaScript bundle and is visible to anyone who can load the UI—do not treat it as a server-side secret. Initial HTTP testing should be IP-restricted (EC2 security group); broader access needs HTTPS and additional access protection.
+
+The frontend never stores Google or OpenAI credentials.
 
 ## Included workflows
 
