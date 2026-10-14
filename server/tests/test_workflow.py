@@ -1135,7 +1135,7 @@ class F01CheckpointTests(unittest.TestCase):
         original_live, original_guard = main.live, main.guard
         try:
             main.live = lambda: orchestrator
-            main.guard = lambda _token: None
+            main.guard = lambda *args, **kwargs: None
             with TestClient(main.app) as client:
                 response = client.post('/api/benchmark/f01-checkpoint', json={'spreadsheet_id': 'register'})
         finally:
@@ -1180,7 +1180,7 @@ class F02AuthorizationTests(unittest.TestCase):
         original_live, original_guard = main.live, main.guard
         try:
             main.live = lambda: orchestrator
-            main.guard = lambda _token: None
+            main.guard = lambda *args, **kwargs: None
             with TestClient(main.app) as client:
                 created = client.post('/api/jobs', json={
                     'project': 'Tri Delta Chapters', 'source_folder_id': 'f01-folder',

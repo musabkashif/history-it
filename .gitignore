@@ -1,6 +1,7 @@
 # Secrets and machine-local config
 .env
 **/.env
+.env.ec2
 credentials/
 
 # Dependencies and local environments

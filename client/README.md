@@ -17,12 +17,11 @@ The app always calls the backend. Set the address in `.env` (see `.env.example`)
 
 ```env
 VITE_API_BASE_URL=http://127.0.0.1:8000
-VITE_API_TOKEN=
 ```
 
 If `VITE_API_BASE_URL` is blank during local development, the Vite proxy sends `/health` and `/api/*` to `http://localhost:8000`.
 
-Do not commit `.env.local` or any secret.
+Browser authentication uses `POST /api/auth/login` and HttpOnly session cookies (`credentials: 'include'`). Do not set `VITE_API_TOKEN`. Do not commit `.env.local` or any secret.
 
 ## Production build
 
@@ -32,11 +31,9 @@ npm run build
 npm run preview
 ```
 
-Docker Compose production (`docker-compose.prod.yml` at the repo root) builds with `VITE_API_BASE_URL` empty so the browser uses the same origin; Nginx serves the static UI and proxies `/api` and `/health` to FastAPI.
+Docker Compose production (`docker-compose.prod.yml`) builds with `VITE_API_BASE_URL` empty so the browser uses the same origin; Nginx serves the static UI over HTTPS and proxies `/api` and `/health` to FastAPI. See `deploy/PUBLIC_ACCESS.md` for login, CSRF, Elastic IP certificates, and migration steps.
 
-Authentication: set `API_TOKEN` on the backend and the same value as `VITE_API_TOKEN` for the frontend image build. The console sends `X-API-Token` on `/api` calls. Any `VITE_*` value is embedded in the JavaScript bundle and is visible to anyone who can load the UI—do not treat it as a server-side secret. Initial HTTP testing should be IP-restricted (EC2 security group); broader access needs HTTPS and additional access protection.
-
-The frontend never stores Google or OpenAI credentials.
+The frontend never stores Google, OpenAI, or API token secrets.
 
 ## Included workflows
 
@@ -71,4 +68,4 @@ The frontend never stores Google or OpenAI credentials.
 
 The frontend does not enumerate Drive folders itself, write Google Sheets, modify benchmark workbooks, or start an inspection during job creation or folder authorization. Those rules remain enforced by the backend.
 
-If `VITE_API_TOKEN` is set, the console sends it as `X-API-Token`. For production, use HTTPS and a deployment setup appropriate for the client’s security policy.
+Operational API calls require a valid browser session cookie (or a server-only `API_TOKEN` for trusted clients). Production access uses HTTPS; see `deploy/PUBLIC_ACCESS.md`.

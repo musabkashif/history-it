@@ -2,29 +2,64 @@ import type { BatchesResponse, CheckpointResponse, CompareResponse, Health, JobF
 
 export const config = {
   baseUrl: (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, ''),
-  token: import.meta.env.VITE_API_TOKEN || '',
+}
+
+const CSRF_COOKIE = 'historyit_csrf'
+const CSRF_HEADER = 'X-CSRF-Token'
+
+function readCookie(name: string): string {
+  const parts = document.cookie.split(';')
+  for (const part of parts) {
+    const [rawKey, ...rest] = part.trim().split('=')
+    if (rawKey === name) return decodeURIComponent(rest.join('=') || '')
+  }
+  return ''
+}
+
+function isMutating(method?: string) {
+  const verb = (method || 'GET').toUpperCase()
+  return !['GET', 'HEAD', 'OPTIONS', 'TRACE'].includes(verb)
+}
+
+export class ApiError extends Error {
+  status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   headers.set('Accept', 'application/json')
   if (init.body) headers.set('Content-Type', 'application/json')
-  if (config.token) headers.set('X-API-Token', config.token)
+  if (isMutating(init.method)) {
+    const csrf = readCookie(CSRF_COOKIE)
+    if (csrf) headers.set(CSRF_HEADER, csrf)
+  }
   let response: Response
-  try { response = await fetch(`${config.baseUrl}${path}`, { ...init, headers }) }
-  catch { throw new Error('Could not reach the archive service.') }
+  try {
+    response = await fetch(`${config.baseUrl}${path}`, { ...init, headers, credentials: 'include' })
+  } catch {
+    throw new Error('Could not reach the archive service.')
+  }
   const text = await response.text()
   let data: unknown = null
   try { data = text ? JSON.parse(text) : null } catch { data = text }
   if (!response.ok) {
     const detail = typeof data === 'object' && data && 'detail' in data ? String((data as { detail: unknown }).detail) : `${response.status} ${response.statusText}`
-    throw new Error(detail)
+    throw new ApiError(response.status, detail)
   }
   return data as T
 }
 
+export type SessionResponse = { authenticated: boolean; username?: string }
+
 export const api = {
   health: () => request<Health>('/health'),
+  login: (username: string, password: string) => request<SessionResponse>('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+  session: () => request<SessionResponse>('/api/auth/session'),
+  logout: () => request<SessionResponse>('/api/auth/logout', { method: 'POST' }),
   createJob: (body: JobForm) => request<JobState>('/api/jobs', { method: 'POST', body: JSON.stringify({ ...body, batch_size: body.batch_size || undefined }) }),
   getJob: (id: string) => request<JobState>(`/api/jobs/${encodeURIComponent(id)}`),
   getBatches: (id: string) => request<BatchesResponse>(`/api/jobs/${encodeURIComponent(id)}/batches`),

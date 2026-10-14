@@ -1,6 +1,6 @@
 export type JobStatus = string
 
-export interface Health { status: string; service?: string; configured?: boolean; diagnostics_build?: string }
+export interface Health { status: string; service?: string; configured?: boolean; diagnostics_build?: string; login_configured?: boolean }
 export interface JobState {
   job_id: string; project: string; spreadsheet_id: string; source_folder_id: string
   authorized_source_folder_ids: string[]; batches: number; status: string; next_batch?: string | null; alert?: string | null

@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     openai_input_usd_per_million: float = Field(default=0, ge=0)
     openai_cached_input_usd_per_million: float = Field(default=0, ge=0)
     openai_output_usd_per_million: float = Field(default=0, ge=0)
+    # Optional server-only token for trusted service clients. Empty disables token auth
+    # (never opens the API). Browser clients must use cookie sessions.
     api_token: str = ''
     job_index_spreadsheet_id: str = ''
     openai_timeout_seconds: int = Field(default=900, ge=60, le=3600)
@@ -27,6 +29,20 @@ class Settings(BaseSettings):
     image_original_max_edge: int = Field(default=2048, ge=256)
     image_resize_max_edge: int = Field(default=2048, ge=256)
     image_jpeg_quality: int = Field(default=95, ge=90, le=100)
+
+    # Shared demo login (Argon2 hash). Missing values fail closed.
+    app_login_username: str = ''
+    app_login_password_hash: str = ''
+    session_ttl_seconds: int = Field(default=43200, ge=300, le=604800)
+    cookie_samesite: str = 'lax'
+    # auto | true | false — auto uses X-Forwarded-Proto / request scheme
+    cookie_secure: str = 'auto'
+    # Comma-separated origins allowed for cookie-authenticated mutations, e.g.
+    # https://203.0.113.10,http://127.0.0.1
+    allowed_origins: str = ''
+    login_max_failures: int = Field(default=5, ge=1, le=50)
+    login_window_seconds: int = Field(default=300, ge=30, le=3600)
+    login_lockout_seconds: int = Field(default=300, ge=30, le=3600)
 
     def validate_live(self):
         from pathlib import Path
