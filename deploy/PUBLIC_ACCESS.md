@@ -2,7 +2,8 @@
 
 HistoryIT serves the operator console behind Nginx with cookie sessions and
 browser-trusted HTTPS using a **stable Elastic IP** and Let's Encrypt IP
-certificates (Certbot 5.4+, `shortlived` profile, webroot validation).
+certificates (Certbot 5.4+, `--preferred-profile shortlived` and
+`--ip-address`, webroot validation).
 
 ## New environment variables
 
@@ -57,6 +58,46 @@ export CERTBOT_EMAIL='you@example.com'
 
 5. Set `ALLOWED_ORIGINS=https://YOUR_ELASTIC_IPV4` in `.env`.
 
+## Docker privileges on the EC2 host
+
+The cert scripts call `docker compose`. Run them from the repo root as a user
+in the `docker` group, **or** with `sudo`.
+
+`sudo` resets the environment by default, so `PUBLIC_IPV4` and `CERTBOT_EMAIL`
+set in your shell are **not** visible inside the script unless you pass them
+through:
+
+```bash
+cd /path/to/history-it
+chmod +x deploy/scripts/*.sh
+
+# Preferred with sudo: pass env on the command line
+sudo PUBLIC_IPV4='YOUR_ELASTIC_IPV4' CERTBOT_EMAIL='you@example.com' \
+  ./deploy/scripts/bootstrap-cert.sh
+
+# Or preserve selected variables already exported in your shell
+sudo --preserve-env=PUBLIC_IPV4,CERTBOT_EMAIL ./deploy/scripts/bootstrap-cert.sh
+
+# Without sudo (user in the docker group)
+export PUBLIC_IPV4='YOUR_ELASTIC_IPV4'
+export CERTBOT_EMAIL='you@example.com'
+./deploy/scripts/bootstrap-cert.sh
+```
+
+Renewal (no Let's Encrypt email/IP flags required; uses stored lineage config):
+
+```bash
+sudo ./deploy/scripts/renew-certs.sh
+# or, as a docker-group user:
+./deploy/scripts/renew-certs.sh
+```
+
+Cron example (root, with an absolute path):
+
+```cron
+0 */12 * * * cd /path/to/history-it && ./deploy/scripts/renew-certs.sh >> /var/log/historyit-cert-renew.log 2>&1
+```
+
 ## Safe migration from the running HTTP stack
 
 1. **Stop serving the app on plain HTTP** while keeping the host up:
@@ -66,13 +107,20 @@ cd /path/to/history-it
 docker compose -f docker-compose.prod.yml -f docker-compose.bootstrap.yml up -d --no-deps web
 ```
 
-   Bootstrap Nginx serves only `/.well-known/acme-challenge/` and `/nginx-health`. It does **not** serve the SPA or proxy `/api`, so login credentials are never posted over HTTP during issuance.
+   The bootstrap overlay **overrides** the prod Nginx mount so
+   `deploy/nginx/bootstrap.conf` is the only file at
+   `/etc/nginx/conf.d/default.conf`. It serves only
+   `/.well-known/acme-challenge/` and `/nginx-health`. It does **not**
+   serve the SPA or proxy `/api`, so login credentials are never posted
+   over HTTP during issuance.
 
-2. **Issue the certificate** (Certbot ≥ 5.4, short-lived IP profile):
+2. **Issue the certificate** (Certbot 5.4 image options:
+   `--preferred-profile shortlived` and `--ip-address`):
 
 ```bash
 chmod +x deploy/scripts/*.sh
-./deploy/scripts/bootstrap-cert.sh
+sudo PUBLIC_IPV4='YOUR_ELASTIC_IPV4' CERTBOT_EMAIL='you@example.com' \
+  ./deploy/scripts/bootstrap-cert.sh
 ```
 
 3. **Bring up the full HTTPS stack** (single API worker, port 8000 unpublished):
@@ -81,7 +129,8 @@ chmod +x deploy/scripts/*.sh
 docker compose -f docker-compose.prod.yml --env-file .env up -d --build
 ```
 
-   Keep renewals on cron via `deploy/scripts/renew-certs.sh` (preferred for Nginx reload).
+   Keep renewals on cron via `deploy/scripts/renew-certs.sh` (reloads Nginx
+   after renew; shortlived settings come from the certificate lineage).
 
 4. Confirm:
 
@@ -89,14 +138,6 @@ docker compose -f docker-compose.prod.yml --env-file .env up -d --build
 curl -fsS "https://${PUBLIC_IPV4}/health"
 curl -fsS -o /dev/null -w "%{http_code}\n" "https://${PUBLIC_IPV4}/docs"   # expect 404
 ```
-
-5. Schedule renewals (short-lived certs renew often). Example crontab:
-
-```cron
-0 */12 * * * cd /path/to/history-it && ./deploy/scripts/renew-certs.sh >> /var/log/historyit-cert-renew.log 2>&1
-```
-
-`renew-certs.sh` runs `certbot renew` and reloads Nginx on success.
 
 ## Auth behavior
 

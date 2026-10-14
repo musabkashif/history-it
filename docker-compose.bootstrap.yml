@@ -1,5 +1,6 @@
 # Overlay: expose only ACME HTTP challenge endpoints while obtaining certificates.
 # Does not serve the SPA or proxy /api (no login over plain HTTP).
+# volumes: !override replaces prod https.conf with bootstrap.conf at the same path.
 #
 #   docker compose -f docker-compose.prod.yml -f docker-compose.bootstrap.yml up -d --no-deps web
 #   ./deploy/scripts/bootstrap-cert.sh
@@ -8,7 +9,7 @@ services:
   web:
     ports:
       - "80:80"
-    volumes:
+    volumes: !override
       - ./deploy/nginx/bootstrap.conf:/etc/nginx/conf.d/default.conf:ro
       - certbot_www:/var/www/certbot:rw
       - certbot_certs:/etc/letsencrypt:ro
