@@ -1,5 +1,7 @@
 # Public client access (HTTPS + shared login)
 
+Production tracks GitHub’s default branch, `master`. Pull and deploy that branch. Older notes in `server/VERIFICATION_REPORT.md` that name `master` at a different commit are historical and stay as written.
+
 HistoryIT serves the operator console behind Nginx with cookie sessions and
 browser-trusted HTTPS using a **stable Elastic IP** and Let's Encrypt IP
 certificates (Certbot 5.4+, `--preferred-profile shortlived` and
