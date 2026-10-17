@@ -15,13 +15,7 @@ Swagger is at `http://localhost:8000/docs`. Required live configuration is docum
 
 ## Credentials
 
-Create a Google service account. Share **Drive source folders** with its `client_email` as **Viewer**. Share the **Production Register / Developer Test spreadsheet** as **Editor** (the app writes). Set `GOOGLE_APPLICATION_CREDENTIALS` to the mounted JSON file. Put the governing packet documents in `GOVERNING_DOCS_DIR`. Set `OPENAI_API_KEY` and a deployable `OPENAI_MODEL`; never commit either secret. Set model pricing per million tokens so spending limits are enforceable.
-
-Operator-facing detail: [`../docs/OPERATOR_GUIDE.md`](../docs/OPERATOR_GUIDE.md).
-
-Create Job and Authorize Folder accept Drive/Sheets **links or IDs**; the API normalizes to canonical IDs before writes (`app/google_ids.py`).
-
-`ENABLE_DEVELOPER_VERIFICATION` (default `false`) gates the Tri Delta Box 19 F01 checkpoint and Frozen Benchmark endpoints. Leave it off for normal operator deployments.
+Create a Google service account with read-only Drive access to the authorized source folder and Sheets read/write access to the developer register. Set `GOOGLE_APPLICATION_CREDENTIALS` to the mounted JSON file. Put the governing packet documents in `GOVERNING_DOCS_DIR`. Set `OPENAI_API_KEY` and a deployable `OPENAI_MODEL`; never commit either secret. Set model pricing per million tokens so spending limits are enforceable.
 
 ## API examples
 

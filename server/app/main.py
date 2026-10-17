@@ -1,6 +1,6 @@
 from __future__ import annotations
 import os
-from fastapi import FastAPI, HTTPException, Header, Request, Response
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Header, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from googleapiclient.errors import HttpError
@@ -8,7 +8,6 @@ from app.config import Settings
 from app.models import JobCreate, JobState, BenchmarkRequest, FolderAuthorize, F01CheckpointRequest, LoginRequest
 from app.adapters import Drive, Sheets
 from app.benchmark import CHECKPOINT_SHEETS, SPECS, compare_workbooks, f01_calibration_checkpoint
-from app.google_ids import GoogleIdError
 from app.inspection import Inspector
 from app.orchestrator import Orchestrator
 from app import auth
@@ -52,18 +51,9 @@ def google_http_exception(exc):
 def call(fn,*args):
  try:return fn(*args)
  except KeyError as e:raise HTTPException(404,str(e))
- except GoogleIdError as e:raise HTTPException(400,str(e))
  except ValueError as e:raise HTTPException(409,str(e))
  except RuntimeError as e:raise HTTPException(503,str(e))
  except HttpError as e:raise google_http_exception(e)
-
-def require_developer_verification():
- if not settings.enable_developer_verification:
-  raise HTTPException(
-   403,
-   'Developer Tri Delta Box 19 verification is disabled. '
-   'Set ENABLE_DEVELOPER_VERIFICATION=true on the server to enable this harness.',
-  )
 
 @app.exception_handler(HttpError)
 def google_error(_request:Request,exc:HttpError):
@@ -71,16 +61,7 @@ def google_error(_request:Request,exc:HttpError):
  return JSONResponse(status_code=err.status_code,content={'detail':err.detail})
 
 @app.get('/health')
-def health():
- return {
-  'status':'ok',
-  'service':'historyit-archive-mvp',
-  'configured':bool(settings.openai_model and settings.google_application_credentials),
-  'diagnostics_build':DIAGNOSTICS_BUILD,
-  'diagnostics_dir':str(__import__('pathlib').Path(settings.diagnostics_dir).resolve()),
-  'login_configured':auth.login_configured(settings),
-  'developer_verification':bool(settings.enable_developer_verification),
- }
+def health():return {'status':'ok','service':'historyit-archive-mvp','configured':bool(settings.openai_model and settings.google_application_credentials),'diagnostics_build':DIAGNOSTICS_BUILD,'diagnostics_dir':str(__import__('pathlib').Path(settings.diagnostics_dir).resolve()),'login_configured':auth.login_configured(settings)}
 
 @app.post('/api/auth/login')
 def login(req: LoginRequest, request: Request, response: Response):
@@ -128,10 +109,8 @@ def create(req:JobCreate,request:Request,x_api_token:str|None=Header(default=Non
 def authorize_folder(job_id:str,req:FolderAuthorize,request:Request,x_api_token:str|None=Header(default=None)):
  guard(request,x_api_token,mutating=True);return call(live().authorize_folder,job_id,req)
 @app.post('/api/jobs/{job_id}/start',response_model=JobState)
-def start(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):
- # Synchronous admission so the response reflects running/already_running.
- # The worker thread owns batch/folder advancement; the browser need not stay open.
- guard(request,x_api_token,mutating=True);return call(live().start,job_id)
+def start(job_id:str,background:BackgroundTasks,request:Request,x_api_token:str|None=Header(default=None)):
+ guard(request,x_api_token,mutating=True);o=live();state=call(o.state,job_id);background.add_task(o.start,job_id);return state
 @app.get('/api/jobs/{job_id}',response_model=JobState)
 def get_job(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):guard(request,x_api_token);return call(live().state,job_id)
 @app.get('/api/jobs/{job_id}/batches')
@@ -171,7 +150,6 @@ def _load_compare_sheets(sheets, spreadsheet_id, names=None):
 @app.post('/api/benchmark/compare')
 def benchmark(req:BenchmarkRequest,request:Request,x_api_token:str|None=Header(default=None)):
     guard(request,x_api_token,mutating=True)
-    require_developer_verification()
     o = live()
     benchmark_id = req.benchmark_spreadsheet_id or settings.benchmark_spreadsheet_id
     if not benchmark_id:
@@ -214,7 +192,6 @@ def benchmark(req:BenchmarkRequest,request:Request,x_api_token:str|None=Header(d
 @app.post('/api/benchmark/f01-checkpoint')
 def f01_checkpoint(req:F01CheckpointRequest,request:Request,x_api_token:str|None=Header(default=None)):
     guard(request,x_api_token,mutating=True)
-    require_developer_verification()
     o = live()
     # Reads the developer register only. The Frozen Benchmark is not opened or written.
     live_sheets, live_errors = _load_compare_sheets(o.sheets, req.spreadsheet_id, CHECKPOINT_SHEETS)

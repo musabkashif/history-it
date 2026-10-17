@@ -359,16 +359,10 @@ class CloseoutTests(unittest.TestCase):
         self.assertNotIn('Authorize the next source folder', resume)
 
     def test_a_partial_folder_set_stays_in_progress(self):
-        # Authorized scope still has unfinished work.
-        self.assertEqual(box_status([
-            {'Source Group / Folder': 'F05', 'Batch Status': 'Committed - Validated'},
-            {'Source Group / Folder': 'F06', 'Batch Status': 'Authorized / Pending Inspection'},
-        ], ['F05'], 'None'), 'In Progress')
-        # Completing the frozen authorized queue closes the box even if it is not F01–F06.
         self.assertEqual(box_status([
             {'Source Group / Folder': 'F05', 'Batch Status': 'Committed - Validated'},
             {'Source Group / Folder': 'F06', 'Batch Status': 'Committed - Validated'},
-        ], ['F05', 'F06'], 'None'), 'Completed - Validated')
+        ], ['F05', 'F06'], 'None'), 'In Progress')
 
 
 class ArchivalComparisonTests(unittest.TestCase):

@@ -1,10 +1,9 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AppShell, type View } from './components/layout'
 import { Alert } from './components/ui'
 import { ApiError, api } from './lib/api'
 import type { Batch, CheckpointResponse, CompareResponse, JobForm, JobState, UsageResponse, ValidationResponse } from './lib/types'
-import { jobIsActive } from './lib/types'
 import { Overview } from './pages/Overview'
 import { NewJob } from './pages/NewJob'
 import { JobPage } from './pages/Job'
@@ -27,20 +26,12 @@ function App() {
   const [validation, setValidation] = useState<ValidationResponse | null>(null)
   const [checkpoint, setCheckpoint] = useState<CheckpointResponse | null>(null)
   const [comparison, setComparison] = useState<CompareResponse | null>(null)
-  const [health, setHealth] = useState<{ status?: string; configured?: boolean; developer_verification?: boolean } | null>(null)
+  const [health, setHealth] = useState<{ status?: string; configured?: boolean } | null>(null)
   const [loading, setLoading] = useState(false)
   const [actionLoading, setActionLoading] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [jobError, setJobError] = useState<string | null>(null)
-  const [refreshError, setRefreshError] = useState<string | null>(null)
-  const [lastRefreshAt, setLastRefreshAt] = useState<string | null>(null)
   const [newJobError, setNewJobError] = useState<string | null>(null)
-
-  const jobIdRef = useRef<string | null>(null)
-  const loadSeqRef = useRef(0)
-  const inFlightRef = useRef(false)
-
-  useEffect(() => { jobIdRef.current = job?.job_id || null }, [job?.job_id])
 
   const handleUnauthorized = useCallback(() => {
     setAuthenticated(false)
@@ -53,42 +44,25 @@ function App() {
 
   const loadJob = useCallback(async (id: string, silent = false) => {
     if (!id) return
-    if (inFlightRef.current && silent) return
-    const seq = ++loadSeqRef.current
-    inFlightRef.current = true
-    if (!silent) setLoading(true)
-    if (!silent) setJobError(null)
+    if (!silent) setLoading(true); setJobError(null)
     try {
       const [nextJob, nextBatches, nextUsage, nextValidation] = await Promise.all([
         api.getJob(id), api.getBatches(id), api.getUsage(id), api.getValidation(id),
       ])
-      // Ignore stale responses after workspace switch or newer refresh.
-      if (seq !== loadSeqRef.current || jobIdRef.current && jobIdRef.current !== id && silent) {
-        return
-      }
-      if (jobIdRef.current && jobIdRef.current !== id) {
-        return
-      }
       setJob(nextJob)
       setBatches(nextBatches.batches || [])
       setUsage(nextUsage)
       setValidation(nextValidation)
       localStorage.setItem(lastJobKey, id)
       setHealth({ status: 'ok', configured: true })
-      setRefreshError(null)
-      setLastRefreshAt(new Date().toISOString())
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         handleUnauthorized()
         return
       }
-      const message = e instanceof Error ? e.message : 'Could not load job'
-      // Transient network failure is a refresh problem, not proof the worker stopped.
-      if (silent) setRefreshError(message)
-      else setJobError(message)
+      setJobError(e instanceof Error ? e.message : 'Could not load job')
     } finally {
-      if (seq === loadSeqRef.current) inFlightRef.current = false
-      if (!silent && seq === loadSeqRef.current) setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [handleUnauthorized])
 
@@ -139,58 +113,22 @@ function App() {
   useEffect(() => {
     if (!authenticated) return
     void api.health().then(h => { setHealth(h); setError(null) }).catch(e => {
-      setHealth({ status: 'offline', developer_verification: false })
+      setHealth({ status: 'offline' })
       setError(e instanceof Error ? e.message : 'Could not reach the archive service')
     })
   }, [authenticated])
 
   useEffect(() => {
-    const base = 'Odyssey · Preservation Software'
-    if (!authenticated) {
-      document.title = base
-      return
-    }
-    if (loading && !job) {
-      document.title = `Loading… · ${base}`
-      return
-    }
-    if (job?.project) {
-      document.title = `${job.project} · ${base}`
-      return
-    }
-    document.title = base
-  }, [authenticated, job?.project, job?.job_id, loading])
-
-  useEffect(() => {
-    if (view === 'benchmark' && !health?.developer_verification) {
-      setView('overview')
-    }
-  }, [view, health?.developer_verification])
-
-  // Poll only while Starting… or the backend worker is live. Idle Authorized jobs do not poll.
-  useEffect(() => {
     if (!authenticated || !job?.job_id) return
-    const starting = actionLoading === 'start'
-    if (!jobIsActive(job, starting)) return
-    const id = job.job_id
-    const timer = window.setInterval(() => {
-      if (jobIdRef.current !== id) return
-      void loadJob(id, true)
-    }, 4000)
+    if (!/Pending|Inspection|Commit|Retryable|Paused/i.test(job.status)) return
+    const timer = window.setInterval(() => void loadJob(job.job_id, true), 10000)
     return () => window.clearInterval(timer)
-  }, [authenticated, job, actionLoading, loadJob])
-
-  // Refresh when returning to the job workspace.
-  useEffect(() => {
-    if (!authenticated || view !== 'job' || !job?.job_id) return
-    void loadJob(job.job_id, true)
-  }, [authenticated, view, job?.job_id, loadJob])
+  }, [authenticated, job?.job_id, job?.status, loadJob])
 
   async function createJob(form: JobForm) {
     setNewJobError(null)
     try {
       const next = await api.createJob(form)
-      jobIdRef.current = next.job_id
       setJob(next)
       localStorage.setItem(lastJobKey, next.job_id)
       await loadJob(next.job_id, true)
@@ -208,7 +146,6 @@ function App() {
   }
 
   async function openJob(id: string) {
-    jobIdRef.current = id
     await loadJob(id)
     setView('job')
     return job
@@ -235,53 +172,18 @@ function App() {
     return <LoginPage onAuthenticated={(name) => { setUsername(name); setAuthenticated(true) }} />
   }
 
-  const developerVerification = Boolean(health?.developer_verification)
-
   const page = view === 'overview'
-    ? <Overview job={job} batches={batches} usage={usage} onNavigate={setView} onRefresh={refresh} loading={loading} lastRefreshAt={lastRefreshAt} refreshError={refreshError} developerVerification={developerVerification} />
+    ? <Overview job={job} batches={batches} usage={usage} onNavigate={setView} onRefresh={refresh} loading={loading} />
     : view === 'new-job'
       ? <NewJob onCreated={() => setView('job')} create={createJob} error={newJobError} />
       : view === 'job'
-        ? <JobPage
-            job={job}
-            batches={batches}
-            usage={usage}
-            validation={validation}
-            loading={loading}
-            error={jobError}
-            refreshError={refreshError}
-            lastRefreshAt={lastRefreshAt}
-            actionLoading={actionLoading}
-            developerVerification={developerVerification}
-            onRefresh={refresh}
-            onStart={() => perform(async () => {
-              const started = await api.start(job?.job_id || '')
-              if (started) setJob(started)
-              return started
-            }, true, 'start')}
-            onPause={() => perform(() => api.pause(job?.job_id || ''), true, 'pause')}
-            onResume={() => perform(() => api.resume(job?.job_id || ''), true, 'resume')}
-            onReconcile={() => perform(() => api.reconcile(job?.job_id || ''), true, 'reconcile')}
-            onValidate={() => perform(() => api.validate(job?.job_id || ''), true, 'validate')}
-            onRetry={(id) => perform(() => api.retry(id), true, id)}
-            onAuthorize={(folder, size) => perform(() => api.authorizeFolder(job?.job_id || '', folder, size), true, 'authorize')}
-            onOpenBenchmark={() => setView('benchmark')}
-          />
-        : view === 'benchmark' && developerVerification
+        ? <JobPage job={job} batches={batches} usage={usage} validation={validation} loading={loading} error={jobError} onRefresh={refresh} onStart={() => perform(() => api.start(job?.job_id || ''))} onPause={() => perform(() => api.pause(job?.job_id || ''))} onResume={() => perform(() => api.resume(job?.job_id || ''))} onReconcile={() => perform(() => api.reconcile(job?.job_id || ''))} onValidate={() => perform(() => api.validate(job?.job_id || ''))} onRetry={(id) => perform(() => api.retry(id))} onAuthorize={(folder, size) => perform(() => api.authorizeFolder(job?.job_id || '', folder, size))} onOpenBenchmark={() => setView('benchmark')} />
+        : view === 'benchmark'
           ? <BenchmarkPage loading={actionLoading} error={error} checkpoint={checkpoint} comparison={comparison} onCheckpoint={async id => { const r = await perform(() => api.checkpoint(id), false, 'checkpoint'); if (r) setCheckpoint(r); if (!r) throw new Error('Verification did not return a response'); return r }} onCompare={async body => { const r = await perform(() => api.compare(body), false, 'compare'); if (r) setComparison(r); if (!r) throw new Error('Comparison did not return a response'); return r }} />
           : <SettingsPage onOpenJob={openJob} currentJobId={job?.job_id || ''} />
 
   return (
-    <AppShell
-      view={view}
-      setView={setView}
-      health={health}
-      username={username}
-      projectName={job?.project}
-      loadingJob={loading && !job}
-      onLogout={logout}
-      logoutLoading={logoutLoading}
-    >
+    <AppShell view={view} setView={setView} health={health} username={username} onLogout={logout} logoutLoading={logoutLoading}>
       {error && view !== 'benchmark' && (
         <div className="mb-5">
           <Alert kind="danger" title="Connection message" onClose={() => setError(null)}>{error}</Alert>

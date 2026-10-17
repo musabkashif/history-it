@@ -2,6 +2,8 @@
 
 Production tracks GitHub’s default branch, `master`. Pull and deploy that branch. Older notes in `server/VERIFICATION_REPORT.md` that name `master` at a different commit are historical and stay as written.
 
+`origin/staging` keeps the `702e229` release and its documentation. Do not promote it by merging `staging` into `master`: `master` reverts that release back to baseline `faa561a`, and a merge of the old staging branch will not reliably restore the reverted features. A future release branch must explicitly revert the rollback, then incorporate the tested staging changes.
+
 HistoryIT serves the operator console behind Nginx with cookie sessions and
 browser-trusted HTTPS using a **stable Elastic IP** and Let's Encrypt IP
 certificates (Certbot 5.4+, `--preferred-profile shortlived` and

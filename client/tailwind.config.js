@@ -4,28 +4,16 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Odyssey Preservation Software palette (logo usage guide)
-        ink: '#E8F1F3',
-        canvas: '#032F3A',
-        panel: '#054657',
-        line: '#177F90',
-        cyan: '#08A2A7',
-        lime: '#A6CE3A',
-        chartreuse: '#CCDB2D',
-        forest: '#039569',
-        teal: '#054657',
-        'teal-mid': '#177F90',
-        amber: '#E2C46A',
-        rose: '#E57373',
-        violet: '#5BA3AE',
+        ink: '#eaf0f7',
+        canvas: '#08111f',
+        panel: '#0e1b2d',
+        line: '#20334c',
+        cyan: '#63e6e2',
+        amber: '#f4c66d',
+        rose: '#fb7185',
+        violet: '#a78bfa',
       },
-      fontFamily: {
-        sans: ['Montserrat', 'Avenir Next', 'Segoe UI', 'ui-sans-serif', 'system-ui', 'sans-serif'],
-        display: ['Montserrat', 'Avenir Next', 'Segoe UI', 'sans-serif'],
-      },
-      boxShadow: {
-        glow: '0 0 0 1px rgba(8,162,167,.18), 0 18px 60px rgba(0,0,0,.28)',
-      },
+      boxShadow: { glow: '0 0 0 1px rgba(99,230,226,.12), 0 18px 60px rgba(0,0,0,.22)' },
     },
   },
   plugins: [],

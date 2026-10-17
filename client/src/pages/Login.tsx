@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { LockKeyhole } from 'lucide-react'
+import { Boxes, LockKeyhole } from 'lucide-react'
 import { Alert, Button } from '../components/ui'
 import { ApiError, api } from '../lib/api'
 
@@ -31,18 +31,24 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: (username: str
   return (
     <div className="relative min-h-screen bg-canvas text-ink">
       <div className="fixed inset-0 -z-0 overflow-hidden">
-        <div className="absolute -left-24 -top-24 h-96 w-96 rounded-full bg-cyan/15 blur-3xl" />
-        <div className="absolute bottom-0 right-0 h-96 w-96 rounded-full bg-lime/10 blur-3xl" />
+        <div className="absolute -left-24 -top-24 h-96 w-96 rounded-full bg-cyan/5 blur-3xl" />
+        <div className="absolute bottom-0 right-0 h-96 w-96 rounded-full bg-violet/5 blur-3xl" />
       </div>
       <div className="relative z-10 flex min-h-screen items-center justify-center px-4 py-10">
         <form onSubmit={submit} className="surface w-full max-w-md p-6 sm:p-8">
           <div className="flex items-center gap-3">
-            <img src="/odyssey-mark-on-dark.svg?v=7" alt="Odyssey Preservation Software" className="h-24 w-auto max-w-[22rem] object-contain object-left" draggable={false} />
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-cyan text-[#062126]">
+              <Boxes className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="text-sm font-bold tracking-wide text-white">HistoryIT</div>
+              <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Archive workspace</div>
+            </div>
           </div>
           <div className="mt-8">
             <div className="eyebrow">Sign in</div>
-            <h1 className="mt-1 font-display text-2xl font-semibold tracking-tight text-white">Operator access</h1>
-            <p className="mt-2 text-sm text-slate-400">Sign in to the Odyssey archive workspace for this deployment.</p>
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">Operator access</h1>
+            <p className="mt-2 text-sm text-slate-500">Use the shared demo account for this deployment.</p>
           </div>
           {error && (
             <div className="mt-5">

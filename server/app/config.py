@@ -44,10 +44,6 @@ class Settings(BaseSettings):
     login_window_seconds: int = Field(default=300, ge=30, le=3600)
     login_lockout_seconds: int = Field(default=300, ge=30, le=3600)
 
-    # Tri Delta Box 19 F01 checkpoint / Frozen Benchmark harness. Default off —
-    # normal operator UI and APIs must not present it as generic verification.
-    enable_developer_verification: bool = False
-
     def validate_live(self):
         from pathlib import Path
         missing = [k for k in ('openai_api_key','openai_model','google_application_credentials') if not getattr(self,k)]

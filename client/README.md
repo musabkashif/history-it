@@ -1,12 +1,8 @@
-# Odyssey frontend (HistoryIT archive workspace)
+# HistoryIT Frontend
 
-Operator console for Odyssey Preservation Software — the HistoryIT Archive Itemization Automation MVP UI.
-
-Branding follows the Odyssey logo usage guide (teal/lime palette). **Neue Kabel** is the guide’s primary typeface; this build uses **Montserrat** as a freely licensed geometric sans fallback because licensed Neue Kabel files are not in the repo.
+A production-ready React + TypeScript + Tailwind operator console for the HistoryIT Archive Itemization Automation MVP.
 
 The interface loads live archive data from the backend. It does not contain Google, OpenAI, or service-account credentials, and it does not include sample or preview data.
-
-Operator setup (Drive Viewer vs Sheets Editor, folder hierarchy, Start/Pause, links/IDs) is documented in [`../docs/OPERATOR_GUIDE.md`](../docs/OPERATOR_GUIDE.md).
 
 ## Run it locally
 
@@ -46,8 +42,8 @@ The frontend never stores Google, OpenAI, or API token secrets.
 - Poll job, Batch Queue, usage, and validation state while processing.
 - Start/continue, pause, resume, reconcile, validate, retry, and authorize the next folder.
 - Show prior open item and continuation evidence for F02 and later folders.
-- Developer-only Tri Delta Box 19 F01 checkpoint / Frozen Benchmark comparison when `ENABLE_DEVELOPER_VERIFICATION=true` (hidden and API-blocked by default).
-- Paste Google Drive folder / Sheets links or raw IDs (normalized on the backend).
+- Run the read-only F01 calibration checkpoint.
+- Run the read-only final Frozen Benchmark comparison with folder scope support.
 - Review classified controlled, free-text, administrative, and distinction-only differences.
 - The console shows only data returned by the backend.
 

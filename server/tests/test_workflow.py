@@ -1133,23 +1133,17 @@ class F01CheckpointTests(unittest.TestCase):
             sheets.store[('register', sheet)] = rows
         orchestrator = Orchestrator(sheets, None, None, Settings())
         original_live, original_guard = main.live, main.guard
-        original_flag = main.settings.enable_developer_verification
         try:
             main.live = lambda: orchestrator
             main.guard = lambda *args, **kwargs: None
-            main.settings.enable_developer_verification = True
             with TestClient(main.app) as client:
                 response = client.post('/api/benchmark/f01-checkpoint', json={'spreadsheet_id': 'register'})
-                main.settings.enable_developer_verification = False
-                blocked = client.post('/api/benchmark/f01-checkpoint', json={'spreadsheet_id': 'register'})
         finally:
             main.live, main.guard = original_live, original_guard
-            main.settings.enable_developer_verification = original_flag
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()['outcome'], 'f01_intermediate_match')
         self.assertEqual(response.json()['final_box19_match'], False)
         self.assertEqual(set(sheets.opened), {'register'})
-        self.assertEqual(blocked.status_code, 403)
 
 
 class RecordingDrive:

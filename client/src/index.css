@@ -2,29 +2,16 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  font-family: Montserrat, "Avenir Next", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
-  color: #e8f1f3;
-  background: #032f3a;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  --odyssey-teal: #054657;
-  --odyssey-cyan: #08a2a7;
-  --odyssey-lime: #a6ce3a;
-  --odyssey-forest: #039569;
-  --odyssey-mid: #177f90;
-}
+:root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #eaf0f7; background: #08111f; font-synthesis: none; text-rendering: optimizeLegibility; }
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; background: #032f3a; }
+body { margin: 0; min-width: 320px; background: #08111f; }
 button, input, select { font: inherit; }
 button { cursor: pointer; }
-::selection { background: rgba(8, 162, 167, 0.35); }
-:focus-visible { outline: 2px solid #08a2a7; outline-offset: 2px; }
+::selection { background: rgba(99,230,226,.3); }
 @layer components {
-  .surface { @apply rounded-2xl border border-line/50 bg-panel/80 shadow-glow; }
-  .surface-muted { @apply rounded-2xl border border-line/40 bg-[#043845]/80; }
-  .eyebrow { @apply text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-300; }
-  .label { @apply mb-2 block text-xs font-medium text-slate-200; }
-  .muted { @apply text-slate-300; }
-  .input { @apply w-full rounded-xl border border-line/60 bg-[#032f3a] px-3.5 py-3 text-sm text-ink outline-none transition placeholder:text-slate-400 focus:border-cyan/70 focus:ring-2 focus:ring-cyan/15; }
+  .surface { @apply rounded-2xl border border-line/80 bg-panel/80 shadow-glow; }
+  .surface-muted { @apply rounded-2xl border border-line/70 bg-[#0b1728]/70; }
+  .eyebrow { @apply text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500; }
+  .label { @apply mb-2 block text-xs font-medium text-slate-400; }
+  .input { @apply w-full rounded-xl border border-line bg-[#091524] px-3.5 py-3 text-sm text-ink outline-none transition placeholder:text-slate-600 focus:border-cyan/60 focus:ring-2 focus:ring-cyan/10; }
 }
