@@ -1,7 +1,8 @@
 from __future__ import annotations
 import hashlib,json,threading,time
 from collections import defaultdict
-from app.box_folders import select_authorized_sources
+from app.box_folders import group_sources_by_folder, select_authorized_sources
+from app.google_ids import ensure_drive_folder, ensure_spreadsheet
 from app.models import Source
 from app.commit import CommitService
 from app.credits import CreditShortageError, credit_alert
@@ -32,7 +33,8 @@ def unit_size(requested, count):
 class Orchestrator:
     def __init__(self,sheets,drive,inspector,settings):
         self.sheets=sheets;self.drive=drive;self.inspector=inspector;self.settings=settings
-        self.committer=CommitService(sheets, getattr(inspector, 'diagnostics', None));self.threads={};self.lock=threading.RLock()
+        self.committer=CommitService(sheets, getattr(inspector, 'diagnostics', None))
+        self.threads={};self.lock=threading.RLock();self._pause_requested=set()
     def _queue(self,sid,job):
         rows=[r for r in self.sheets.rows(sid,'Batch Queue') if r.get('Job ID')==job]
         for r in rows:
@@ -51,6 +53,9 @@ class Orchestrator:
         if not rows:raise KeyError(job)
         return sid,rows
     def create(self,req):
+        # Canonical IDs are already normalized by JobCreate. Confirm type/access before any writes.
+        ensure_drive_folder(self.drive, req.source_folder_id)
+        ensure_spreadsheet(self.sheets, req.spreadsheet_id)
         self.sheets.ensure_tab(self.settings.job_index_spreadsheet_id,'HistoryIT Jobs',['Job ID','Spreadsheet ID','Project','Source Folder ID'])
         self.sheets.ensure_tab(req.spreadsheet_id,'OpenAI Usage',['Call ID','Project','Job ID','Batch ID','Model','Source Image Count','Input Tokens','Cached Input Tokens','Output Tokens','Estimated Cost USD','Attempt','Elapsed Seconds','Status','Cumulative Job Cost USD','Response ID'])
         digest=hashlib.sha256((req.spreadsheet_id+'|'+req.source_folder_id+'|'+req.project).encode()).hexdigest()[:16]
@@ -63,8 +68,7 @@ class Orchestrator:
         if not sources:raise ValueError('Authorized folder contains no images')
         existing={r.get('Digital Asset') for r in self.sheets.rows(req.spreadsheet_id,'Asset QC')}
         if existing & {s.name for s in sources}:raise ValueError('Authorized sources already exist in Asset QC')
-        folders=defaultdict(list)
-        for s in sources:folders[s.folder_id].append(s)
+        folders=dict(group_sources_by_folder(sources))
         requested=req.batch_size or self.settings.batch_size
         # Register is authoritative; the index only resolves opaque IDs to sheet IDs.
         self.sheets.write(self.settings.job_index_spreadsheet_id,'HistoryIT Jobs',{'Job ID':job,'Spreadsheet ID':req.spreadsheet_id,'Project':req.project,'Source Folder ID':req.source_folder_id},('Job ID',job))
@@ -74,15 +78,68 @@ class Orchestrator:
         sid,rows=self._job(job)
         pending=next((r for r in rows if r['Batch Status']!='Committed - Validated'),None)
         roots=[]
+        folders=[]
         for row in rows:
             root=self._batch_root(row)
             if root and root not in roots:roots.append(root)
+            folder=str(row.get('Source Group / Folder') or '').strip()
+            if folder and folder not in folders:folders.append(folder)
         original=self._locator(job).get('Source Folder ID','')
         if original and original not in roots:roots.insert(0,original)
-        return {'job_id':job,'project':rows[0]['Project'],'spreadsheet_id':sid,'source_folder_id':original,'authorized_source_folder_ids':roots,'batches':len(rows),'status':'Paused' if any(r['Batch Status']=='Paused' for r in rows) else ('Completed - Validated' if pending is None else pending['Batch Status']),'next_batch':pending['Batch ID'] if pending else None,'alert':self.alert(rows)}
+        running=self._running(job)
+        pause_requested=job in self._pause_requested or any(r['Batch Status']=='Paused' for r in rows)
+        if pending is None:
+            status='Completed - Validated'
+        elif pause_requested and not running:
+            status='Paused'
+        elif running:
+            status=self._running_status(pending)
+        elif any(r['Batch Status']=='Paused' for r in rows):
+            status='Paused'
+        else:
+            status=pending['Batch Status']
+        # Commit Written - Pending Validation is never final PASS for the job.
+        scope_complete=pending is None
+        return {
+            'job_id':job,
+            'project':rows[0]['Project'],
+            'spreadsheet_id':sid,
+            'source_folder_id':original,
+            'authorized_source_folder_ids':roots,
+            'discovered_folders':folders,
+            'batches':len(rows),
+            'status':status,
+            'next_batch':pending['Batch ID'] if pending else None,
+            'current_folder':(pending or rows[-1]).get('Source Group / Folder') if rows else None,
+            'current_batch':pending['Batch ID'] if pending else None,
+            'phase':pending['Batch Status'] if pending else 'Completed - Validated',
+            'running':running,
+            'already_running':False,
+            'pause_requested':pause_requested,
+            'authorized_scope_complete':scope_complete,
+            'alert':self.alert(rows),
+        }
+    def _running(self,job):
+        thread=self.threads.get(job)
+        return bool(thread and thread.is_alive())
+    @staticmethod
+    def _running_status(pending):
+        phase=str(pending.get('Batch Status') or '')
+        if phase=='Commit Written - Pending Validation':
+            return 'Running - Validating'
+        if phase=='Inspection Complete - Awaiting Commit':
+            return 'Running - Committing'
+        if phase=='Inspection In Progress':
+            return 'Running - Inspecting'
+        return 'Running'
     def authorize_folder(self,job,req):
-        """Queue one explicitly authorized folder on an existing job. Do not start inspection."""
+        """Queue an explicitly authorized folder or parent box on an existing job. Do not start inspection.
+
+        Parent IDs discover every immediate F* child not already on the frozen queue.
+        Individual folder IDs remain supported. Scope expansion is always explicit.
+        """
         sid,rows=self._job(job)
+        # Idempotent re-post of an already-queued root does not require the new batches to finish first.
         if any(self._batch_root(row)==req.source_folder_id for row in rows):
             return self.state(job)
         thread=self.threads.get(job)
@@ -90,22 +147,30 @@ class Orchestrator:
             raise ValueError('Job is still running. Authorize the next folder after it stops.')
         if any(row.get('Batch Status')!='Committed - Validated' for row in rows):
             raise ValueError('Existing batches are not Committed - Validated. Refusing to enumerate or queue the next folder.')
+        ensure_drive_folder(self.drive, req.source_folder_id)
         sources=select_authorized_sources(self.drive.enumerate(req.source_folder_id))
         if not sources:raise ValueError('Authorized folder contains no images')
+        known_folders=set()
         known=set()
-        for row in rows:known.update(self._manifest_names(row))
+        for row in rows:
+            known.update(self._manifest_names(row))
+            for item in (json.loads(row.get('Notes') or '{}').get('manifest') or []):
+                if isinstance(item,dict) and item.get('folder_id'):
+                    known_folders.add(item['folder_id'])
         known.update(r.get('Digital Asset') for r in self.sheets.rows(sid,'Asset QC'))
-        names=[s.name for s in sources]
+        new_sources=[s for s in sources if s.folder_id not in known_folders and s.name not in known]
+        if not new_sources:
+            return self.state(job)
+        names=[s.name for s in new_sources]
         overlap=sorted(set(names) & {n for n in known if n})
         if overlap:raise ValueError('Authorized folder repeats filenames already on this job: '+', '.join(overlap[:5]))
         if len(names)!=len(set(names)):raise ValueError('Authorized folder contains duplicate filenames')
-        folders=defaultdict(list)
-        for s in sources:folders[s.folder_id].append(s)
+        folders=dict(group_sources_by_folder(new_sources))
         last=rows[-1]
         prior=str(last.get('Resulting Open Item') or '').strip() or 'None'
         start=max(int(row['Batch ID'].rsplit('-B',1)[-1]) for row in rows)
         requested=req.batch_size or self.settings.batch_size
-        self._append_batches(sid,job,rows[0]['Project'],last.get('Box') or 'Chapters Box 19',folders,requested,prior,start,req.source_folder_id)
+        self._append_batches(sid,job,rows[0]['Project'],last.get('Box') or rows[0].get('Box') or '',folders,requested,prior,start,req.source_folder_id)
         return self.state(job)
     @staticmethod
     def _batch_root(row):
@@ -120,7 +185,8 @@ class Orchestrator:
     def _append_batches(self,sid,job,project,box,folders,requested,prior_for_first,start_seq,authorized_root):
         seq=start_seq
         first=True
-        for fid,group in folders.items():
+        items=folders.items() if isinstance(folders,dict) else folders
+        for fid,group in items:
             step=unit_size(requested,len(group))
             for start in range(0,len(group),step):
                 chunk=group[start:start+step];seq+=1;bid=f'{job}-B{seq:04d}'
@@ -142,13 +208,35 @@ class Orchestrator:
     def _credit_blocked(self,row):
         return row.get('Batch Status')=='Blocked - Human Review' and str(row.get('Error / Retry Note') or '').startswith('OpenAI account is out of credits.')
     def start(self,job):
+        """Admit at most one runner per job for this process. Repeated Start is a no-op.
+
+        Single-worker deployment safety: admission is atomic under self.lock. This does
+        not claim multi-process locking across separate API workers.
+        After a process restart, call Start/Resume again; durable Batch Queue state is
+        resumable and previously validated batches are not reinspected.
+        """
         with self.lock:
             thread=self.threads.get(job)
-            if thread and thread.is_alive():return self.state(job)
+            if thread and thread.is_alive():
+                state=self.state(job)
+                state['already_running']=True
+                state['running']=True
+                return state
+            self._pause_requested.discard(job)
             t=threading.Thread(target=self.run,args=(job,),daemon=True,name='historyit-'+job)
             self.threads[job]=t;t.start()
-        return self.state(job)
+        state=self.state(job)
+        state['running']=True
+        return state
     def pause(self,job):
+        """Persist pause intent and stop at the next safe batch checkpoint.
+
+        In-flight inspection/commit/validation for the current batch is not cancelled;
+        later Authorized / retryable batches become Paused so the runner halts before
+        starting them.
+        """
+        with self.lock:
+            self._pause_requested.add(job)
         sid,rows=self._job(job)
         for row in rows:
             if row['Batch Status'] in ('Authorized / Pending Inspection','Inspection Failed - Retryable'):
@@ -156,6 +244,8 @@ class Orchestrator:
         return self.state(job)
     def resume(self,job):
         sid,rows=self._job(job)
+        with self.lock:
+            self._pause_requested.discard(job)
         for row in rows:
             if self._credit_blocked(row):
                 self.sheets.write(sid,'Batch Queue',{'Batch Status':'Authorized / Pending Inspection','Error / Retry Note':''},('Batch ID',row['Batch ID']))
@@ -333,6 +423,12 @@ class Orchestrator:
         }
         return [Source.model_validate(item) for item in manifest],context,rules,reference,prior
     def run(self,job):
+        """Backend-owned runner: recover pending commit/validation, then advance batches and folders.
+
+        Does not require frontend polling. Stops only for pause, blocked review, inaccessible
+        required material surfaced as errors, spending limit, retry exhaustion, or validation
+        failure. Ordinary Cropping/QC production tasks on committed records do not halt the box.
+        """
         sid,rows=self._job(job)
         try:assert_single_active_batch(rows)
         except BatchAuthorizationError as exc:
@@ -344,12 +440,24 @@ class Orchestrator:
             b=next(r for r in self._queue(sid,job) if r['Batch ID']==b['Batch ID'])
             status=b['Batch Status']
             if status=='Committed - Validated':
+                # Repair staging statuses from durable evidence; never reinspect.
                 self.committer.validate(sid,b,already=True);self._authorize_following(sid,job,b['Batch ID']);continue
-            if status in ('Paused','Blocked - Human Review'):return
+            if status=='Blocked - Human Review':
+                return
+            if status=='Paused' or (job in self._pause_requested and status in ('Authorized / Pending Inspection','Inspection Failed - Retryable')):
+                if status!='Paused':
+                    self.sheets.write(sid,'Batch Queue',{'Batch Status':'Paused'},('Batch ID',b['Batch ID']))
+                return
             if status in ('Inspection In Progress','Inspection Failed - Retryable','Commit Failed - Retryable'):
+                # Prefer durable staging over repeating an apparently failed inspection.
                 if self._staging_ready(sid,b):status='Inspection Complete - Awaiting Commit'
+                elif status=='Commit Failed - Retryable' and self._staging_ready(sid,b):
+                    status='Inspection Complete - Awaiting Commit'
                 else:status='Authorized / Pending Inspection'
             if status=='Authorized / Pending Inspection':
+                if job in self._pause_requested:
+                    self.sheets.write(sid,'Batch Queue',{'Batch Status':'Paused'},('Batch ID',b['Batch ID']))
+                    return
                 try:
                     sources,context,rules,reference,prior=self._inspection_inputs(sid,b)
                 except (RegisterStateError,BatchAuthorizationError,ReferenceError) as exc:
@@ -401,6 +509,7 @@ class Orchestrator:
                     if path:note=f'{note[:180]} [Diagnostic: {path}]'
                     self.sheets.write(sid,'Batch Queue',{'Batch Status':'Inspection Failed - Retryable','Error / Retry Note':note[:300]},('Batch ID',b['Batch ID']))
                     return
+            # Commit Written - Pending Validation and Awaiting Commit continue here without reinspection.
             try:
                 b=next(r for r in self._queue(sid,job) if r['Batch ID']==b['Batch ID'])
                 self.committer.commit(sid,b)
@@ -418,6 +527,7 @@ class Orchestrator:
                         self.sheets.write(sid,'Batch Queue',{'Batch Status':'Commit Failed - Retryable','Error / Retry Note':note[:300]},('Batch ID',b['Batch ID']))
                 return
         self._close_folders(sid,job)
+        self._pause_requested.discard(job)
     def _close_folders(self,sid,job):
         groups=defaultdict(list)
         for b in self._queue(sid,job):groups[b['Source Group / Folder']].append(b)

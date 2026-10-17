@@ -77,6 +77,7 @@ class CommitService:
         # itemization, and ready rows, so replaying this batch's original plan against
         # the current register is not a reason to block it.
         if already:
+            self._mark_staging_committed(sid, bid)
             return {'batch_id':bid,'status':'Committed - Validated','idempotent_noop':True}
         if assets is None:assets,records=self._staging(sid,bid)
         current=self.tables(sid)
@@ -118,16 +119,48 @@ class CommitService:
             self._log_validation(queue,'validation_failed',success=False,failed_checks=failed,checks=checks)
             self.sheets.write(sid,'Batch Queue',{'Batch Status':'Blocked - Human Review','Validation Status':'FAIL','Error / Retry Note':', '.join(failed)},('Batch ID',bid))
             raise CommitError('Validation failed: '+', '.join(failed))
-        if already:return {'batch_id':bid,'status':'Committed - Validated','idempotent_noop':True,'checks':checks}
         metrics=calculate_metrics(current)
-        self._summaries(sid,queue,plan,metrics,assets)
-        self._history(sid,bid,checks)
-        # Verify summary and checkpoint readback before queue closeout.
+        # Continuation fields and Batch Queue closeout must succeed before any PASS labels.
+        self._apply_continuation(sid, queue, plan, metrics, assets)
         if self.sheets.field(sid,'Open Intellectual Item')!=plan.resulting_open_item:
             self._log_validation(queue,'validation_failed',success=False,failed_checks=['Continuation readback'],expected_open_item=plan.resulting_open_item)
             raise CommitError('Continuation readback mismatch')
         self.sheets.write(sid,'Batch Queue',{'Batch Status':'Committed - Validated','Resulting Open Item':plan.resulting_open_item,'Validation Status':'PASS','Commit Date':date.today().strftime('%m/%d/%y'),'Error / Retry Note':''},('Batch ID',bid))
+        self._summaries(sid,queue,plan,metrics,assets)
+        self._history(sid,bid,checks)
+        # Staging Commit Status stays Pending Commit until readback validation succeeds.
+        self._mark_staging_committed(sid, bid)
         return {'batch_id':bid,'status':'Committed - Validated','idempotent_noop':False,'checks':checks,'metrics':asdict(metrics)}
+
+    def _mark_staging_committed(self, sid, bid):
+        """Idempotently move this batch's staging rows off Pending Commit after validated commit."""
+        for row in self.sheets.rows(sid, 'Asset Staging'):
+            if row.get('Batch ID') != bid:
+                continue
+            status = str(row.get('Commit Status') or '').strip()
+            if status == 'Committed - Validated':
+                continue
+            if status and status not in ('Pending Commit', 'Pending'):
+                continue
+            self.sheets.write(
+                sid, 'Asset Staging',
+                {'Commit Status': 'Committed - Validated', 'Commit Note': 'Committed - Validated'},
+                ('Digital Asset', row.get('Digital Asset')),
+            )
+        for row in self.sheets.rows(sid, 'Record Staging'):
+            if row.get('Batch ID') != bid:
+                continue
+            status = str(row.get('Commit Status') or '').strip()
+            if status == 'Committed - Validated':
+                continue
+            if status and status not in ('Pending Commit', 'Pending'):
+                continue
+            self.sheets.write(
+                sid, 'Record Staging',
+                {'Commit Status': 'Committed - Validated', 'Commit Note': 'Committed - Validated'},
+                [('Batch ID', bid), ('Proposed Record ID', row.get('Proposed Record ID'))],
+            )
+
     @staticmethod
     def _equal(actual,expected,key):
         if len(actual)!=len(expected):return False
@@ -136,15 +169,19 @@ class CommitService:
     def _history(self,sid,bid,checks):
         for i,(name,ok) in enumerate(checks.items(),1):
             self.sheets.write(sid,'Validation',{'Check ID':f'{bid}-V{i:02d}','Scope':bid,'Requirement':name,'Method':'Deterministic staging/manifest/readback reconciliation','Result':'PASS' if ok else 'FAIL','Details':'' if ok else 'Mismatch; blocked','Last Checked':date.today().isoformat()},('Check ID',f'{bid}-V{i:02d}'))
-    def _summaries(self,sid,q,plan,m,a):
-        project=q['Project'];box=q['Box'];group=q['Source Group / Folder'];bid=q['Batch ID'];unit=a[0]['Processing Unit / Source Folder']
-        metrics={k:str(getattr(m,v)) for k,v in METRICS.items()}
-        self.sheets.write(sid,'Project Register',{'Project':project,'Processing Unit / Source Folder':unit,'Status':'Committed - Validated','Box':box,'Source Group / Folder':group,**metrics,'Open Item':plan.resulting_open_item,'Open Context':plan.resulting_open_item,'Committed Date':date.today().isoformat(),'Validation Result':'PASS','Notes':bid},('Notes',bid))
-        self.sheets.write(sid,'Box Summary',{'Box':box,'Box Status':'In Progress','Source Assets':metrics['Source Assets'],'Odyssey Metadata Records':metrics['Odyssey Metadata Records'],'Metadata Only References':metrics['Metadata Only References'],'Ready Records':metrics['Ready Records'],'Blocked - Cropping/QC':metrics['Blocked - Cropping/QC'],'Blocked - Additional Imaging':metrics['Blocked - Additional Imaging'],'Review Records':metrics['Review Records'],'Content-Linked Assets':metrics['Content-Linked Assets'],'Logical Components':metrics['Logical Components'],'Production Tasks':metrics['Production Tasks'],'Open Item':plan.resulting_open_item,'Open Context':bid},('Box',box))
-        self.sheets.write(sid,'Folder Processing Unit Summary',{'Project':project,'Processing Unit / Source Folder':unit,'Box':box,'Source Group / Folder':group,'Authorization Status':'Authorized','Processing Status':'In Progress','Enumerated New Source Count':str(len(a)),'Processed New Source Count':str(len(a)),'Asset QC Rows':str(len(a)),'Odyssey Metadata Records':str(plan.new_normal_record_count),'Metadata Only References':str(plan.new_reference_count),'Ready Records':str(plan.newly_ready_count),'Blocked Records':str(plan.blocked_record_count),'Production Tasks':str(plan.new_task_count),'Duplicate Exceptions':str(sum(bool(x.get('Exception / Duplicate Note')) for x in a)),'Open Item':plan.resulting_open_item,'Open Context':bid,'Validation Status':'PASS','Completed Date':date.today().isoformat(),'Notes':bid},('Processing Unit / Source Folder',unit))
+    def _apply_continuation(self,sid,q,plan,m,a):
+        group=q['Source Group / Folder']
         self.sheets.set_field(sid,'Open Intellectual Item',plan.resulting_open_item)
         self.sheets.set_field(sid,'Unresolved Boundary Item',plan.resulting_open_item)
         self.sheets.set_field(sid,'Last Source Filename Buffer',a[-1]['Digital Asset'])
         self.sheets.set_field(sid,'Open Production / QC Task Summary',f'{m.production_tasks} actionable production/QC tasks')
         self.sheets.set_field(sid,'Active Folder / Source Group',group)
         self.sheets.set_field(sid,'Last Updated',date.today().isoformat())
+
+    def _summaries(self,sid,q,plan,m,a):
+        project=q['Project'];box=q['Box'];group=q['Source Group / Folder'];bid=q['Batch ID'];unit=a[0]['Processing Unit / Source Folder']
+        metrics={k:str(getattr(m,v)) for k,v in METRICS.items()}
+        self.sheets.write(sid,'Project Register',{'Project':project,'Processing Unit / Source Folder':unit,'Status':'Committed - Validated','Box':box,'Source Group / Folder':group,**metrics,'Open Item':plan.resulting_open_item,'Open Context':plan.resulting_open_item,'Committed Date':date.today().isoformat(),'Validation Result':'PASS','Notes':bid},('Notes',bid))
+        self.sheets.write(sid,'Box Summary',{'Box':box,'Box Status':'In Progress','Source Assets':metrics['Source Assets'],'Odyssey Metadata Records':metrics['Odyssey Metadata Records'],'Metadata Only References':metrics['Metadata Only References'],'Ready Records':metrics['Ready Records'],'Blocked - Cropping/QC':metrics['Blocked - Cropping/QC'],'Blocked - Additional Imaging':metrics['Blocked - Additional Imaging'],'Review Records':metrics['Review Records'],'Content-Linked Assets':metrics['Content-Linked Assets'],'Logical Components':metrics['Logical Components'],'Production Tasks':metrics['Production Tasks'],'Open Item':plan.resulting_open_item,'Open Context':bid},('Box',box))
+        self.sheets.write(sid,'Folder Processing Unit Summary',{'Project':project,'Processing Unit / Source Folder':unit,'Box':box,'Source Group / Folder':group,'Authorization Status':'Authorized','Processing Status':'In Progress','Enumerated New Source Count':str(len(a)),'Processed New Source Count':str(len(a)),'Asset QC Rows':str(len(a)),'Odyssey Metadata Records':str(plan.new_normal_record_count),'Metadata Only References':str(plan.new_reference_count),'Ready Records':str(plan.newly_ready_count),'Blocked Records':str(plan.blocked_record_count),'Production Tasks':str(plan.new_task_count),'Duplicate Exceptions':str(sum(bool(x.get('Exception / Duplicate Note')) for x in a)),'Open Item':plan.resulting_open_item,'Open Context':bid,'Validation Status':'PASS','Completed Date':date.today().isoformat(),'Notes':bid},('Processing Unit / Source Folder',unit))
+        self._apply_continuation(sid,q,plan,m,a)

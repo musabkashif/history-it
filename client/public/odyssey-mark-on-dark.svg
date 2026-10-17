@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="138 78 418 206" role="img" aria-label="Odyssey Preservation Software">
+  <defs>
+    <linearGradient id="odysseyRingDark" x1="0%" y1="50%" x2="100%" y2="50%">
+      <stop offset="0%" stop-color="#08A2A7"/>
+      <stop offset="45%" stop-color="#039569"/>
+      <stop offset="100%" stop-color="#A6CE3A"/>
+    </linearGradient>
+  </defs>
+  <!--
+    Primary mark traced from the Odyssey logo usage guide:
+    thick broken ring (gaps at 3 and 9 o'clock), ODYSSEY centered
+    vertically through the ring and continuing out the right gap,
+    PRESERVATION SOFTWARE right-aligned under the wordmark.
+  -->
+  <g fill="none" stroke="url(#odysseyRingDark)" stroke-width="17" stroke-linecap="butt">
+    <path d="M 178.93 132.29 A 77.5 77.5 0 0 0 301.07 132.29"/>
+    <path d="M 178.93 227.71 A 77.5 77.5 0 0 1 301.07 227.71"/>
+  </g>
+  <text x="162.0" y="200.0" fill="#FFFFFF"
+        font-family="Montserrat, Avenir Next, Segoe UI, sans-serif"
+        font-size="58" font-weight="700"
+        textLength="378" lengthAdjust="spacing">ODYSSEY</text>
+  <text x="535.0" y="227.0" text-anchor="end" fill="#FFFFFF"
+        font-family="Montserrat, Avenir Next, Segoe UI, sans-serif"
+        font-size="13" font-weight="500" letter-spacing="0.08em"
+        textLength="200" lengthAdjust="spacing">PRESERVATION SOFTWARE</text>
+</svg>

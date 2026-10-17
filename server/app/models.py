@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Any
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
+from app.google_ids import GoogleIdError, parse_drive_folder_id, parse_spreadsheet_id
 
 ASSET_HEADERS = ('Project','Job ID','Batch ID','Processing Unit / Source Folder','Asset Sequence','Digital Asset','Box','Source Group / Folder','Assigned Record ID','Asset Role','Required Crop Standard','QC Status','Action Needed','Expected Output Asset Count','QC Confidence','QC Note','Odyssey Ingest / Visibility Note','Production Queue Eligible','Production Task Scope','Production Task Note','Exception / Duplicate Note','Inspection Complete','Commit Status','Commit Note')
 RECORD_HEADERS = ('Project','Job ID','Batch ID','Processing Unit / Source Folder','Record Sequence','Proposed Record ID','Record Kind','Record Operation','Box','Source Group / Folder','Parent Scrapbook','Parent Scrapbook Page','New Batch Assets','Existing Committed Assets','Full Record Assets After Commit','Digital Asset Count','Logical Component Count','Template','Type','Reference Role','Further Detail','Required Crop Standard','Record QC Status','Record Action Needed','Metadata Readiness','Confidence','Review Note','Production Task Count','Odyssey Ingest / Visibility Note','Notes','Boundary State After Record','Inspection Complete','Commit Status','Commit Note')
@@ -87,7 +88,36 @@ class JobCreate(BaseModel):
     source_folder_id: str
     spreadsheet_id: str
     batch_size: int | None = Field(default=None, ge=1, le=100)
-    box: str = 'Chapters Box 19'
+    box: str = ''
+
+    @field_validator('project', 'box', mode='before')
+    @classmethod
+    def _trim_text(cls, value):
+        return str(value or '').strip()
+
+    @field_validator('source_folder_id', mode='before')
+    @classmethod
+    def _folder_id(cls, value):
+        try:
+            return parse_drive_folder_id(value)
+        except GoogleIdError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @field_validator('spreadsheet_id', mode='before')
+    @classmethod
+    def _sheet_id(cls, value):
+        try:
+            return parse_spreadsheet_id(value)
+        except GoogleIdError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @model_validator(mode='after')
+    def _require_labels(self):
+        if not self.project:
+            raise ValueError('Project name is required.')
+        if not self.box:
+            raise ValueError('Box label is required (use the workspace box name, not a hard-coded example).')
+        return self
 
 class JobState(BaseModel):
     job_id: str
@@ -95,14 +125,30 @@ class JobState(BaseModel):
     spreadsheet_id: str
     source_folder_id: str
     authorized_source_folder_ids: list[str] = []
+    discovered_folders: list[str] = []
     batches: int
     status: str
     next_batch: str | None = None
+    current_folder: str | None = None
+    current_batch: str | None = None
+    phase: str | None = None
+    running: bool = False
+    already_running: bool = False
+    pause_requested: bool = False
+    authorized_scope_complete: bool = False
     alert: str | None = None
 
 class FolderAuthorize(BaseModel):
     source_folder_id: str
     batch_size: int | None = Field(default=None, ge=1, le=100)
+
+    @field_validator('source_folder_id', mode='before')
+    @classmethod
+    def _folder_id(cls, value):
+        try:
+            return parse_drive_folder_id(value)
+        except GoogleIdError as exc:
+            raise ValueError(str(exc)) from exc
 
 class BenchmarkRequest(BaseModel):
     spreadsheet_id: str
@@ -110,8 +156,35 @@ class BenchmarkRequest(BaseModel):
     box: str = 'Chapters Box 19'
     folder: str = ''
 
+    @field_validator('spreadsheet_id', mode='before')
+    @classmethod
+    def _sheet_id(cls, value):
+        try:
+            return parse_spreadsheet_id(value)
+        except GoogleIdError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @field_validator('benchmark_spreadsheet_id', mode='before')
+    @classmethod
+    def _benchmark_id(cls, value):
+        text = str(value or '').strip()
+        if not text:
+            return None
+        try:
+            return parse_spreadsheet_id(text)
+        except GoogleIdError as exc:
+            raise ValueError(str(exc)) from exc
+
 class F01CheckpointRequest(BaseModel):
     spreadsheet_id: str
+
+    @field_validator('spreadsheet_id', mode='before')
+    @classmethod
+    def _sheet_id(cls, value):
+        try:
+            return parse_spreadsheet_id(value)
+        except GoogleIdError as exc:
+            raise ValueError(str(exc)) from exc
 
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=128)

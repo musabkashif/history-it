@@ -95,19 +95,18 @@ def _queued_units(queue_rows):
 
 
 def source_scope_closed(queue_rows, done, open_item) -> bool:
-    """True only when this job queued F01–F06, every batch validated, and nothing is open.
+    """True only when every authorized queued folder is validated and nothing is open.
 
-    A parent authorization discovers those six folders. A smaller authorization
-    stays open because the box can still receive another folder.
+    Scope is the frozen Batch Queue authorization, not a hard-coded F01–F06 range.
+    A smaller authorization stays open because another folder can still be added
+    explicitly; whole-box completion requires the authorized queue to be finished.
     """
-    from app.box_folders import BOX_FOLDERS
-
     units = _queued_units(queue_rows)
-    if set(units) != set(BOX_FOLDERS) or not queue_rows:
+    if not units or not queue_rows:
         return False
     if any(canon(row.get('Batch Status')) != 'Committed - Validated' for row in queue_rows):
         return False
-    if any(folder not in set(done) for folder in BOX_FOLDERS):
+    if any(folder not in set(done) for folder in units):
         return False
     return canon(open_item) in ('', 'None')
 
@@ -119,7 +118,7 @@ def next_unprocessed_source(queue_rows, done, open_item='None'):
     if not done:
         return ''
     if source_scope_closed(queue_rows, done, open_item):
-        return 'None - Chapters Box 19 source exhausted'
+        return 'None - authorized source exhausted'
     if len(done) == 1:
         return f'None - {done[0]} source exhausted; next folder is not yet authorized'
     return 'None - authorized source exhausted (' + ', '.join(done) + '); next folder is not yet authorized'
@@ -159,7 +158,7 @@ def resume_instruction(done, open_item, queue_rows=None):
     if queue_rows is not None and source_scope_closed(queue_rows, done, open_item):
         return (
             f'Do not reprocess {listed}. No intellectual item is open. '
-            'Chapters Box 19 source processing is complete.'
+            'Authorized source processing is complete.'
         )
     if open_item and open_item != 'None':
         return (
@@ -262,10 +261,12 @@ def _batch_rows(rows, batch_id, key='Batch ID'):
 
 
 def box_status(queue_rows, done, open_item, item_rows=None) -> str:
-    """Close the box only after F01–F06 are validated, nothing is open, and no classification is unresolved.
+    """Close the box only after the authorized queue is validated, nothing is open, and no classification is unresolved.
 
-    Any smaller authorized set stays In Progress. A batch validation PASS is not
-    box completion. An empty queue is not a finished box. Unresolved Review is not completion.
+    Scope follows the frozen authorized Batch Queue, not a hard-coded F01–F06 range.
+    A batch validation PASS is not whole-box completion. An empty queue is not a
+    finished box. Unresolved Review is not completion. Ordinary Cropping/QC
+    production tasks do not by themselves keep the box open once source scope is closed.
     """
     from app.vocabulary import unresolved_material_review
     if any(unresolved_material_review(row) for row in (item_rows or [])):
@@ -329,7 +330,7 @@ def plan_reconciliation(queue_rows, folder_rows, asset_rows, record_rows, contin
         status_action = 'write' if status_current != status_desired else 'ok'
     decisions.append(_decision(
         'Box Summary', 'Box Status', status_desired, status_current, status_action,
-        'Box status is Completed - Validated only when F01 through F06 are validated and no intellectual item is open',
+        'Box status is Completed - Validated only when every authorized queued folder is validated and no intellectual item is open',
     ))
 
     derived = {

@@ -135,7 +135,7 @@ class GoverningConstraintTests(unittest.TestCase):
         self.assertEqual(output.records[0].metadata_readiness, 'Metadata Reference')
         self.assertEqual(output.records[0].production_task_count, '0')
 
-    def test_box_stays_in_progress_after_the_authorized_folders_validate(self):
+    def test_box_closes_when_the_authorized_scope_validates(self):
         self.assertEqual(box_status([], [], 'None'), 'In Progress')
         sheets = TrackingSheets()
         rows = [
@@ -169,10 +169,11 @@ class GoverningConstraintTests(unittest.TestCase):
         ]
         first = reconcile_register(sheets, 'register', 'HIT-1', sheets.rows('register', 'Batch Queue'))
         status = sheets.rows('register', 'Box Summary')[0]
-        self.assertEqual(status['Box Status'], 'In Progress')
+        # Frozen authorized scope was only F05–F06; completing it closes the box.
+        self.assertEqual(status['Box Status'], 'Completed - Validated')
         self.assertEqual(status['Completed - Validated Folders'], '2')
         second = reconcile_register(sheets, 'register', 'HIT-1', sheets.rows('register', 'Batch Queue'))
-        self.assertEqual(sheets.rows('register', 'Box Summary')[0]['Box Status'], 'In Progress')
+        self.assertEqual(sheets.rows('register', 'Box Summary')[0]['Box Status'], 'Completed - Validated')
         self.assertEqual([row['Digital Asset'] for row in sheets.rows('register', 'Asset QC')], ['a.jpg'])
         self.assertEqual(first['assets_appended'], 0)
         self.assertEqual(second['assets_appended'], 0)

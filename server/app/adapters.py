@@ -52,34 +52,118 @@ class Drive:
     def _execute(self, request):
         return _execute(self._lock, request)
 
+    def _list_children(self, folder_id: str):
+        token = None
+        children = []
+        while True:
+            response = self._execute(lambda folder_id=folder_id, token=token: self.api.files().list(
+                q=f"'{folder_id}' in parents and trashed = false",
+                fields='nextPageToken,files(id,name,mimeType)',
+                pageSize=1000,
+                pageToken=token,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            ))
+            children.extend(response.get('files', []))
+            token = response.get('nextPageToken')
+            if not token:
+                break
+        return children
+
     def enumerate(self, root: str):
+        """Enumerate authorized images. Parent roots discover only immediate F* children."""
         from app.models import Source
+        from app.box_folders import (
+            detect_ambiguous_f_folders,
+            is_f_folder_name,
+            natural_f_key,
+            select_authorized_sources,
+        )
         root_name = self._execute(lambda: self.api.files().get(fileId=root, fields='name', supportsAllDrives=True))['name']
+        try:
+            top = self._list_children(root)
+        except Exception as exc:
+            raise ValueError(f'Authorized folder {root_name} ({root}) is inaccessible: {exc}') from exc
+        f_children = [
+            child for child in top
+            if child.get('mimeType') == 'application/vnd.google-apps.folder' and is_f_folder_name(child.get('name'))
+        ]
+        if f_children:
+            conflicts = detect_ambiguous_f_folders([child.get('name') for child in f_children])
+            if conflicts:
+                raise ValueError('Ambiguous F-folder identities: ' + '; '.join(conflicts))
+            out = []
+            for child in sorted(f_children, key=lambda item: natural_f_key(item.get('name'))):
+                folder_id = child['id']
+                folder_name = child['name']
+                path = f'{root_name}/{folder_name}'
+                try:
+                    entries = self._list_children(folder_id)
+                except Exception as exc:
+                    raise ValueError(
+                        f'Authorized F-folder {folder_name} ({folder_id}) is inaccessible and cannot be skipped: {exc}'
+                    ) from exc
+                images = [
+                    Source(
+                        id=entry['id'],
+                        name=entry['name'],
+                        folder_id=folder_id,
+                        folder_name=folder_name,
+                        path=f"{path}/{entry['name']}",
+                        mime_type=entry['mimeType'],
+                    )
+                    for entry in entries
+                    if entry.get('mimeType') in IMAGE_MIME
+                ]
+                if not images:
+                    raise ValueError(
+                        f'Authorized F-folder {folder_name} ({folder_id}) contains no images and cannot be skipped'
+                    )
+                out.extend(sorted(images, key=lambda item: (item.path, item.id)))
+            out = select_authorized_sources(out)
+            if len({source.name for source in out}) != len(out):
+                raise ValueError('Duplicate source filename across folder hierarchy; cannot reconcile Asset QC by filename')
+            return out
+
         seen, out, stack = set(), [], [(root, root_name)]
         while stack:
             fid, path = stack.pop()
-            if fid in seen: raise ValueError('Drive folder cycle or duplicate folder ID')
+            if fid in seen:
+                raise ValueError('Drive folder cycle or duplicate folder ID')
             seen.add(fid)
-            token = None
-            children = []
-            while True:
-                response = self._execute(lambda fid=fid, token=token: self.api.files().list(q=f"'{fid}' in parents and trashed = false", fields='nextPageToken,files(id,name,mimeType)',pageSize=1000,pageToken=token,supportsAllDrives=True,includeItemsFromAllDrives=True))
-                children.extend(response.get('files',[]))
-                token = response.get('nextPageToken')
-                if not token: break
-            for f in sorted(children,key=lambda x:(x['name'],x['id']),reverse=True):
-                if f['mimeType']=='application/vnd.google-apps.folder': stack.append((f['id'],path+'/'+f['name']))
-                elif f['mimeType'] in IMAGE_MIME:
-                    out.append(Source(id=f['id'],name=f['name'],folder_id=fid,folder_name=path.rsplit('/',1)[-1] or fid,path=path+'/'+f['name'],mime_type=f['mimeType']))
-        out.sort(key=lambda s:(s.path,s.id))
-        from app.box_folders import select_authorized_sources
+            try:
+                children = self._list_children(fid)
+            except Exception as exc:
+                raise ValueError(f'Source folder {path} ({fid}) is inaccessible: {exc}') from exc
+            for entry in sorted(children, key=lambda item: (item['name'], item['id']), reverse=True):
+                if entry['mimeType'] == 'application/vnd.google-apps.folder':
+                    stack.append((entry['id'], path + '/' + entry['name']))
+                elif entry['mimeType'] in IMAGE_MIME:
+                    out.append(Source(
+                        id=entry['id'],
+                        name=entry['name'],
+                        folder_id=fid,
+                        folder_name=path.rsplit('/', 1)[-1] or fid,
+                        path=path + '/' + entry['name'],
+                        mime_type=entry['mimeType'],
+                    ))
+        out.sort(key=lambda source: (source.path, source.id))
         out = select_authorized_sources(out)
-        if len({s.name for s in out})!=len(out): raise ValueError('Duplicate source filename across folder hierarchy; cannot reconcile Asset QC by filename')
+        if len({source.name for source in out}) != len(out):
+            raise ValueError('Duplicate source filename across folder hierarchy; cannot reconcile Asset QC by filename')
         return out
 
     def image(self, source):
         # Only called by inspection. Never injected into the commit service.
         return self._execute(lambda: self.api.files().get_media(fileId=source.id,supportsAllDrives=True))
+
+    def file_meta(self, file_id: str):
+        """Read-only Drive metadata for accessibility/type checks (no download)."""
+        return self._execute(lambda: self.api.files().get(
+            fileId=file_id,
+            fields='id,name,mimeType,driveId',
+            supportsAllDrives=True,
+        ))
 
 class Sheets:
     def __init__(self, credentials=None):
@@ -204,6 +288,13 @@ class Sheets:
         return self._execute(lambda: self.api.values().get(
             spreadsheetId=sid, range=f"'{sheet}'!{a1}", valueRenderOption='UNFORMATTED_VALUE',
         )).get('values', [])
+
+    def spreadsheet_meta(self, spreadsheet_id: str):
+        """Read-only spreadsheet properties for accessibility checks (no tab writes)."""
+        return self._execute(lambda: self.api.get(
+            spreadsheetId=spreadsheet_id,
+            fields='spreadsheetId,properties.title',
+        ))
 
     def field(self,sid,name):
         for row in self.rows(sid,'Continuation State'):
