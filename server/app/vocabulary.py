@@ -168,10 +168,17 @@ _CLAUSE_BREAK = re.compile(r'[.!?;:]')
 _NEGATION_SUFFIX = re.compile(
     r'(?:^|\s)(?:no|not|without|absent|lacks?|none)\b(?:\s+[a-z]+){0,4}\s*$'
 )
+_TRAILING_DENIAL = re.compile(
+    r'^(?:\s+[a-z]+){0,4}\s+(?:is|are|was|were)\s+(?:absent|missing|not\s+present)\b'
+)
 
 
 def _affirmed(text: str, phrase: str) -> bool:
-    """True when phrase is a whole word outside a negated clause such as 'no excess'."""
+    """True when one occurrence is a whole word and that clause does not deny it.
+
+    A denial before or after the phrase negates that occurrence only.
+    Another clause can still affirm the same phrase.
+    """
     haystack = collapse(text).casefold()
     needle = collapse(phrase).casefold()
     if not needle:
@@ -183,16 +190,17 @@ def _affirmed(text: str, phrase: str) -> bool:
             return False
         end = index + len(needle)
         bounded = (index == 0 or not haystack[index - 1].isalnum()) and (end == len(haystack) or not haystack[end].isalnum())
-        if bounded and not _negated(haystack, index):
+        if bounded and not _negated(haystack, index, end):
             return True
         start = end
 
 
-def _negated(text: str, index: int) -> bool:
-    clause = _CLAUSE_BREAK.split(text[max(0, index - 48):index])[-1]
-    if re.search(r'(?:^|\s)non-$', clause):
+def _negated(text: str, index: int, end: int) -> bool:
+    before = _CLAUSE_BREAK.split(text[max(0, index - 48):index])[-1]
+    if re.search(r'(?:^|\s)non-$', before) or _NEGATION_SUFFIX.search(before):
         return True
-    return _NEGATION_SUFFIX.search(clause) is not None
+    after = _CLAUSE_BREAK.split(text[end:end + 64], maxsplit=1)[0]
+    return _TRAILING_DENIAL.search(after) is not None
 
 
 def _context_inventory(blob: str) -> bool:

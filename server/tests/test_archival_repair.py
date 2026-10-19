@@ -485,6 +485,63 @@ class QcCorrectionTests(unittest.TestCase):
         self.assertEqual(output.assets[4].queue_eligible, 'No')
         self.assertEqual(output.records[6].metadata_readiness, 'Review')
 
+    def test_a_denial_after_the_phrase_does_not_cancel_another_clause(self):
+        absent = asset('absent.jpg', 'absent', action='Archival Border Crop')
+        absent.qc_note = 'Excess background is absent.'
+        absent.required_crop_standard = 'Archival Border'
+        prefixed = asset('prefixed.jpg', 'prefixed', action='Archival Border Crop')
+        prefixed.qc_note = 'No excess background.'
+        prefixed.required_crop_standard = 'Archival Border'
+        present = asset('present.jpg', 'present', action='Archival Border Crop')
+        present.qc_note = 'Excess background is present.'
+        present.required_crop_standard = 'Archival Border'
+        mixed = asset('mixed.jpg', 'mixed', action='Archival Border Crop')
+        mixed.qc_note = 'Excess background is absent. Excess black capture background surrounds the page.'
+        mixed.required_crop_standard = 'Archival Border'
+        denied_inventory = record('denied', kind='Metadata Only', template='Metadata Only', type_name='', readiness='Metadata Reference')
+        denied_inventory.further_detail = 'Descriptive inventory is absent. Typed citation index.'
+        affirmed_inventory = record('affirmed', template='Document', type_name='Report')
+        affirmed_inventory.further_detail = (
+            'Descriptive inventory that describes the surrounding photographs is present. The citation index is absent.'
+        )
+        blank_absent = asset('blank-absent.jpg', 'blank-absent', action='Rotate')
+        blank_absent.qc_note = 'Blank verso is absent.'
+        blank_present = asset('blank-present.jpg', 'blank-present', action='Rotate')
+        blank_present.qc_note = 'Blank verso is present.'
+        mixed_turn = asset('mixed-turn.jpg', 'mixed-turn', action='Rotate')
+        mixed_turn.qc_note = 'Blank verso is absent. The print is 180 degrees from upright.'
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[absent, prefixed, present, mixed, blank_absent, blank_present, mixed_turn],
+            records=[
+                record('absent', template='Document', type_name='Report', readiness='Ready'),
+                record('prefixed', template='Document', type_name='Report', readiness='Ready'),
+                record('present', template='Document', type_name='Report', readiness='Ready'),
+                record('mixed', template='Document', type_name='Report', readiness='Ready'),
+                denied_inventory,
+                affirmed_inventory,
+                record('blank-absent', template='Photographic Image', type_name='Photograph', readiness='Ready'),
+                record('blank-present', template='Photographic Image', type_name='Photograph', readiness='Ready'),
+                record('mixed-turn', template='Photographic Image', type_name='Photograph', readiness='Ready'),
+            ],
+        ))
+        self.assertEqual(output.assets[0].action_needed, 'No Adjustment')
+        self.assertEqual(output.records[0].metadata_readiness, 'Ready')
+        self.assertEqual(output.assets[1].action_needed, 'No Adjustment')
+        self.assertEqual(output.records[1].metadata_readiness, 'Ready')
+        self.assertEqual(output.assets[2].action_needed, 'Archival Border Crop')
+        self.assertEqual(output.records[2].metadata_readiness, 'Blocked - Cropping/QC')
+        self.assertEqual(output.assets[3].action_needed, 'Archival Border Crop')
+        self.assertEqual(output.records[3].metadata_readiness, 'Blocked - Cropping/QC')
+        self.assertEqual(output.records[4].record_kind, 'Normal Odyssey')
+        self.assertEqual(output.records[4].type, 'Research Notes')
+        self.assertEqual(output.records[5].record_kind, 'Metadata Only')
+        self.assertEqual(output.records[5].production_task_count, '0')
+        self.assertEqual(output.assets[4].action_needed, 'Rotate')
+        self.assertEqual(output.records[6].metadata_readiness, 'Blocked - Cropping/QC')
+        self.assertEqual(output.assets[5].action_needed, 'No Adjustment')
+        self.assertEqual(output.assets[6].action_needed, 'Rotate')
+        self.assertEqual(output.records[8].metadata_readiness, 'Blocked - Cropping/QC')
+
 
 class ParentDiscoveryTests(unittest.TestCase):
     def test_parent_only_authorization_orders_f01_through_f06_and_skips_delhivery(self):
