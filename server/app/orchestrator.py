@@ -16,6 +16,7 @@ from app.authorization import (
 )
 from app.references import ReferenceError, order_records, reference_mismatches, references_dir, resolve_reference
 from client_reference.commit_engine import CommitError, split_assets, validate_staging
+from app.deployment_admission import DeploymentHoldError, enter_admission, leave_admission
 
 TERMINAL={'Committed - Validated','Blocked - Human Review'}
 
@@ -34,7 +35,7 @@ class Orchestrator:
     def __init__(self,sheets,drive,inspector,settings):
         self.sheets=sheets;self.drive=drive;self.inspector=inspector;self.settings=settings
         self.committer=CommitService(sheets, getattr(inspector, 'diagnostics', None))
-        self.threads={};self.lock=threading.RLock();self._pause_requested=set()
+        self.threads={};self.lock=threading.RLock();self._pause_requested=set();self._deploy_hold=False;self._admission_depth=0
     def _queue(self,sid,job):
         rows=[r for r in self.sheets.rows(sid,'Batch Queue') if r.get('Job ID')==job]
         for r in rows:
@@ -212,10 +213,14 @@ class Orchestrator:
 
         Single-worker deployment safety: admission is atomic under self.lock. This does
         not claim multi-process locking across separate API workers.
+        A deployment hold refuses new runners. It does not pause, resume, or cancel a
+        runner that has already been admitted.
         After a process restart, call Start/Resume again; durable Batch Queue state is
         resumable and previously validated batches are not reinspected.
         """
         with self.lock:
+            if self._deploy_hold:
+                raise DeploymentHoldError('Deployment hold is active; refusing to start a job')
             thread=self.threads.get(job)
             if thread and thread.is_alive():
                 state=self.state(job)
@@ -228,6 +233,15 @@ class Orchestrator:
         state=self.state(job)
         state['running']=True
         return state
+    def deployment_status(self):
+        from app.deployment_admission import status
+        return status(self)
+    def deployment_hold(self):
+        from app.deployment_admission import acquire
+        return acquire(self)
+    def deployment_release(self):
+        from app.deployment_admission import release
+        return release(self)
     def pause(self,job):
         """Persist pause intent and stop at the next safe batch checkpoint.
 
@@ -243,15 +257,19 @@ class Orchestrator:
                 self.sheets.write(sid,'Batch Queue',{'Batch Status':'Paused'},('Batch ID',row['Batch ID']))
         return self.state(job)
     def resume(self,job):
-        sid,rows=self._job(job)
-        with self.lock:
-            self._pause_requested.discard(job)
-        for row in rows:
-            if self._credit_blocked(row):
-                self.sheets.write(sid,'Batch Queue',{'Batch Status':'Authorized / Pending Inspection','Error / Retry Note':''},('Batch ID',row['Batch ID']))
-            elif row['Batch Status']=='Paused':
-                self.sheets.write(sid,'Batch Queue',{'Batch Status':'Authorized / Pending Inspection'},('Batch ID',row['Batch ID']))
-        return self.start(job)
+        enter_admission(self)
+        try:
+            sid,rows=self._job(job)
+            with self.lock:
+                self._pause_requested.discard(job)
+            for row in rows:
+                if self._credit_blocked(row):
+                    self.sheets.write(sid,'Batch Queue',{'Batch Status':'Authorized / Pending Inspection','Error / Retry Note':''},('Batch ID',row['Batch ID']))
+                elif row['Batch Status']=='Paused':
+                    self.sheets.write(sid,'Batch Queue',{'Batch Status':'Authorized / Pending Inspection'},('Batch ID',row['Batch ID']))
+            return self.start(job)
+        finally:
+            leave_admission(self)
     def reconcile(self, job):
         """Fill derived register fields for an already committed job. Does not inspect or authorize a folder."""
         sid, rows = self._job(job)
@@ -267,6 +285,12 @@ class Orchestrator:
             self.sheets.write(sid, 'Batch Queue', ranges, ('Batch ID', batch_id))
 
     def retry(self,bid):
+        enter_admission(self)
+        try:
+            return self._retry_unlocked(bid)
+        finally:
+            leave_admission(self)
+    def _retry_unlocked(self,bid):
         for jobrow in self.sheets.rows(self.settings.job_index_spreadsheet_id,'HistoryIT Jobs'):
             sid=jobrow['Spreadsheet ID']
             matches=[r for r in self.sheets.rows(sid,'Batch Queue') if r['Batch ID']==bid]
