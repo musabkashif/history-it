@@ -1,0 +1,63 @@
+name: Deploy production
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Deploy the selected master commit to production
+        required: true
+        type: choice
+        options:
+          - deploy
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: deploy-historyit-production
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Verify CI for this master commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    if: github.repository == 'musabkashif/history-it' && github.ref == 'refs/heads/master' && github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'deploy' && github.event.repository.fork == false
+    steps:
+      - name: Check out the exact commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Wait until CI succeeded for this SHA
+        env:
+          HISTORYIT_SHA: ${{ github.sha }}
+          HISTORYIT_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: python deploy/scripts/deploy_release.py wait-for-ci
+
+  deploy:
+    name: Deploy production
+    needs: gate
+    runs-on: [self-hosted, linux, x64, historyit-prod]
+    timeout-minutes: 60
+    if: github.repository == 'musabkashif/history-it' && github.ref == 'refs/heads/master' && github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'deploy' && github.event.repository.fork == false
+    steps:
+      - name: Check out the exact commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Activate the tested commit
+        env:
+          HISTORYIT_ENV: production
+          HISTORYIT_SHA: ${{ github.sha }}
+          HISTORYIT_REPOSITORY: ${{ github.repository }}
+          HISTORYIT_GITHUB_RUN_ID: ${{ github.run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 deploy/scripts/deploy_release.py deploy
