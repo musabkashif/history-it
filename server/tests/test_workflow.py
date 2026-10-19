@@ -840,6 +840,99 @@ class CalibrationTests(unittest.TestCase):
         summary = next(row for row in sheets.rows('register', 'Folder Processing Unit Summary') if row.get('Source Group / Folder') == 'F01')
         self.assertEqual(summary['Processing Status'], 'Completed - Validated')
 
+    def test_completed_folder_summary_rolls_up_by_project_box_and_folder(self):
+        def record_row(record_id, template, type_name, readiness='Ready'):
+            return RecordRow.model_validate(filled(RECORD_HEADERS, **{
+                'Proposed Record ID': record_id, 'Record Kind': 'Normal Odyssey', 'Record Operation': 'Create New',
+                'Template': template, 'Type': type_name, 'Metadata Readiness': readiness,
+                'Boundary State After Record': 'Closed', 'Production Task Count': '0', 'Confidence': 'High',
+            }))
+
+        def asset_row(filename, record_id, action='No Adjustment', note='', exception=''):
+            return AssetRow.model_validate(filled(ASSET_HEADERS, **{
+                'Digital Asset': filename, 'Assigned Record ID': record_id, 'Action Needed': action,
+                'QC Note': note, 'Exception / Duplicate Note': exception,
+            }))
+
+        def output_for(filenames):
+            if filenames == ['a1.jpg', 'a2.jpg']:
+                return InspectionOutput(assets=[
+                    asset_row('a1.jpg', 'doc-a', exception='Distinct physical sheet.'),
+                    asset_row('a2.jpg', 'doc-a'),
+                ], records=[record_row('doc-a', 'Document', 'Report')])
+            if filenames == ['a3.jpg']:
+                return InspectionOutput(
+                    assets=[asset_row('a3.jpg', 'doc-b')],
+                    records=[record_row('doc-b', 'Document', 'Report')],
+                )
+            if filenames == ['b1.jpg', 'b2.jpg']:
+                return InspectionOutput(assets=[
+                    asset_row('b1.jpg', 'photo', action='Rotate', note='The print is 180 degrees from upright.'),
+                    asset_row('b2.jpg', 'photo'),
+                ], records=[record_row('photo', 'Photographic Image', 'Photograph')])
+            return InspectionOutput(
+                assets=[asset_row(filenames[0], 'other')],
+                records=[record_row('other', 'Document', 'Report')],
+            )
+
+        class ByBatch(CapturingInspector):
+            def inspect(self, job, batch_id, sources, context, rules):
+                self.calls.append(batch_id)
+                return output_for([source.name for source in sources]), {
+                    'input_tokens': 1, 'cached_input_tokens': 0, 'output_tokens': 1,
+                    'elapsed_seconds': 0.1, 'response_id': 'resp',
+                }
+
+        def batch(batch_id, filenames, box, folder):
+            row = queue_row(batch_id, filenames, **{'Box': box, 'Source Group / Folder': folder})
+            row['Notes'] = json.dumps({'manifest': manifest(filenames, folder)})
+            return row
+
+        sheets = MemorySheets()
+        install_job(sheets, [
+            batch('HIT-1-B0001', ['a1.jpg', 'a2.jpg'], 'Chapters Box 19', 'F04'),
+            batch('HIT-1-B0002', ['a3.jpg'], 'Chapters Box 19', 'F04'),
+            batch('HIT-1-B0003', ['b1.jpg', 'b2.jpg'], 'Chapters Box 31', 'F04'),
+            batch('HIT-1-B0004', ['c1.jpg'], 'Chapters Box 19', 'F08'),
+        ])
+        orchestrator = Orchestrator(sheets, None, ByBatch(), Settings())
+        orchestrator.run('HIT-1')
+        self.assertEqual(
+            [row['Batch Status'] for row in sheets.rows('register', 'Batch Queue')],
+            ['Committed - Validated'] * 4,
+        )
+
+        def summary(box, folder):
+            matches = [
+                row for row in sheets.rows('register', 'Folder Processing Unit Summary')
+                if row.get('Project') == 'Tri Delta Chapters' and row.get('Box') == box and row.get('Source Group / Folder') == folder
+            ]
+            self.assertEqual(len(matches), 1)
+            return matches[0]
+
+        first = summary('Chapters Box 19', 'F04')
+        second = summary('Chapters Box 31', 'F04')
+        sibling = summary('Chapters Box 19', 'F08')
+        self.assertEqual(first['Processing Status'], 'Completed - Validated')
+        self.assertEqual(first['Asset QC Rows'], '3')
+        self.assertEqual(first['Enumerated New Source Count'], '3')
+        self.assertEqual(first['Odyssey Metadata Records'], '2')
+        self.assertEqual(first['Ready Records'], '2')
+        self.assertEqual(first['Blocked Records'], '0')
+        self.assertEqual(first['Production Tasks'], '0')
+        self.assertEqual(first['Duplicate Exceptions'], '1')
+        self.assertEqual(second['Asset QC Rows'], '2')
+        self.assertEqual(second['Odyssey Metadata Records'], '1')
+        self.assertEqual(second['Ready Records'], '0')
+        self.assertEqual(second['Blocked Records'], '1')
+        self.assertEqual(second['Production Tasks'], '1')
+        self.assertEqual(second['Duplicate Exceptions'], '0')
+        self.assertEqual(sibling['Asset QC Rows'], '1')
+        self.assertEqual(sibling['Odyssey Metadata Records'], '1')
+        before = [dict(row) for row in sheets.rows('register', 'Folder Processing Unit Summary')]
+        orchestrator._close_folders('register', 'HIT-1')
+        self.assertEqual(sheets.rows('register', 'Folder Processing Unit Summary'), before)
+
     def test_calibration_id_and_version_are_logged_and_sent(self):
         from app.inspection import Inspector
         reference = resolve_reference(Path(__file__).resolve().parents[1] / 'project_references', 'Tri Delta Chapters', 'Chapters Box 19', 'F01')

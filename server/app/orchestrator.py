@@ -4,7 +4,7 @@ from collections import defaultdict
 from app.box_folders import group_sources_by_folder, select_authorized_sources
 from app.google_ids import ensure_drive_folder, ensure_spreadsheet
 from app.models import Source
-from app.commit import CommitService
+from app.commit import CommitService, folder_summary_key
 from app.credits import CreditShortageError, credit_alert
 from app.decisions import apply_governing_constraints
 from app.diagnostics import exception_chain
@@ -552,17 +552,69 @@ class Orchestrator:
                 return
         self._close_folders(sid,job)
         self._pause_requested.discard(job)
+    @staticmethod
+    def _same_folder_scope(row, project, box, folder):
+        if (row.get('Project') or '') != project or (row.get('Box') or '') != box:
+            return False
+        group = row.get('Source Group / Folder') or row.get('Processing Unit / Source Folder') or ''
+        return group == folder
+    def _folder_summary_counts(self, sid, project, box, folder, names):
+        """Replace the batch-sized summary with totals from committed rows for this folder.
+
+        Counts are recomputed from authoritative detail rows, so a repeated close
+        does not add the same assets again. Project, box, and folder all have to match.
+        """
+        wanted = set(names)
+        def named(row):
+            return set(split_assets(row.get('Digital Assets'))) & wanted
+        def scoped(row):
+            return self._same_folder_scope(row, project, box, folder)
+        qc = [row for row in self.sheets.rows(sid, 'Asset QC') if row.get('Digital Asset') in wanted and scoped(row)]
+        items = [row for row in self.sheets.rows(sid, 'Itemization') if scoped(row) and named(row)]
+        refs = [row for row in self.sheets.rows(sid, 'Metadata References') if scoped(row) and named(row)]
+        ready = {
+            row.get('Item ID') for row in self.sheets.rows(sid, 'Ready for Metadata')
+            if scoped(row) and row.get('Item ID') and named(row)
+        }
+        blocked = [row for row in items if str(row.get('Metadata Readiness') or '').startswith('Blocked')]
+        tasks = [
+            row for row in self.sheets.rows(sid, 'Production Queue')
+            if scoped(row) and row.get('Digital Asset') in wanted
+            and str(row.get('Task Status') or 'Open').strip() not in {'Closed', 'Cancelled', 'Canceled'}
+        ]
+        exceptions = sum(1 for row in qc if str(row.get('Exception / Duplicate Note') or '').strip())
+        count = str(len(wanted))
+        return {
+            'Enumerated New Source Count': count,
+            'Processed New Source Count': count,
+            'Asset QC Rows': str(len(qc)),
+            'Odyssey Metadata Records': str(len(items)),
+            'Metadata Only References': str(len(refs)),
+            'Ready Records': str(len(ready)),
+            'Blocked Records': str(len(blocked)),
+            'Production Tasks': str(len(tasks)),
+            'Duplicate Exceptions': str(exceptions),
+        }
     def _close_folders(self,sid,job):
         groups=defaultdict(list)
-        for b in self._queue(sid,job):groups[b['Source Group / Folder']].append(b)
-        for folder,bs in groups.items():
+        for b in self._queue(sid,job):
+            groups[(b.get('Project') or '', b.get('Box') or '', b.get('Source Group / Folder') or '')].append(b)
+        for (project, box, folder), bs in groups.items():
             names=[s['name'] for b in bs for s in b['_manifest']]
-            qc=[r for r in self.sheets.rows(sid,'Asset QC') if r['Digital Asset'] in names]
+            qc=[
+                r for r in self.sheets.rows(sid,'Asset QC')
+                if r.get('Digital Asset') in set(names) and self._same_folder_scope(r, project, box, folder)
+            ]
             # Source completion does not require Resulting Open Item or Continuation
             # State to be None. An intellectual item may stay open for the next folder.
             if all(b['Batch Status']=='Committed - Validated' for b in bs) and len(qc)==len(names) and {r['Digital Asset'] for r in qc}==set(names):
+                counts=self._folder_summary_counts(sid, project, box, folder, names)
                 for r in self.sheets.rows(sid,'Folder Processing Unit Summary'):
-                    if r['Source Group / Folder']==folder and r.get('Notes','').startswith(job):
-                        self.sheets.write(sid,'Folder Processing Unit Summary',{'Processing Status':'Completed - Validated','Completed Date':time.strftime('%Y-%m-%d')},('Processing Unit / Source Folder',r['Processing Unit / Source Folder']))
+                    if (r.get('Project'), r.get('Box'), r.get('Source Group / Folder')) != (project, box, folder):
+                        continue
+                    if not str(r.get('Notes') or '').startswith(job):
+                        continue
+                    unit=r.get('Processing Unit / Source Folder') or folder
+                    self.sheets.write(sid,'Folder Processing Unit Summary',{'Processing Status':'Completed - Validated','Completed Date':time.strftime('%Y-%m-%d'),**counts},folder_summary_key(project, box, unit))
         from app.register_state import reconcile_register
         reconcile_register(self.sheets, sid, job, self._queue(sid, job))
