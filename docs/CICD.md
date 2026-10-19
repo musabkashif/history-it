@@ -2,7 +2,7 @@
 
 Workflow files and the host script are in the infrastructure commit. A push of that commit runs CI. No deployment in this change replaced containers on either host. `STAGING_AUTODEPLOY_ENABLED` is not set, so a staging CI completion does not select the self-hosted runner.
 
-Safe unattended deployment is not enabled. Both running processes admit work only in memory. `/health` does not report live inspections, commits, or validation. The deploy script fails closed unless the running process grants `historyit.deployment-admission.v1`.
+Staging deployment of `b34f992` succeeded. Its admission status was idle/open, and the container restart check passed. Production still runs the earlier application, which has no admission route. This master commit adds that guard to the production baseline. It does not install it on the production host. `/health` still does not report live inspections, commits, or validation. The deploy script fails closed unless the running process grants `historyit.deployment-admission.v1`. `STAGING_AUTODEPLOY_ENABLED` remains unset. Production deployment stays `workflow_dispatch` only.
 
 ## Workflows
 
@@ -91,37 +91,35 @@ Recommended, not required for the script itself: restrict who can run `workflow_
 
 ## Active jobs and the first deploy
 
-Production (`159d872`, application tree `faa561a`) and the running staging checkout (`2fcc9d3`) both keep runners in `Orchestrator.threads` inside one Uvicorn process.
+Production's pre-guard process and the staging process both keep runners in `Orchestrator.threads` inside one Uvicorn process. Staging `b34f992` now answers the admission route. The production host does not, until the one-time install below.
 
 - Start holds that process lock and will not start a second thread for the same job.
-- The lock is not visible outside the process. There is no freeze that blocks a different job, or a Start that arrives after an external idle check.
+- Once this guard is running, Start, Resume, and Retry enter admission before they launch a worker. An acquired hold refuses that launch. A live worker, or admission already in progress, refuses the hold.
 - Pause does not cancel an inspection, commit, or validation that has already begun.
 - Sheet labels and `/health` can both look idle while a thread is in a model call, and a sheet can still say `Inspection In Progress` after the thread is gone.
 - Staging's `job.running` flag is that same in-memory thread, returned only for one authenticated job. It is not a deploy lock.
 
-`server/app/deployment_admission.py` is a separate staging application change. `POST /internal/deployment-admission/hold` shares the orchestrator lock. It returns `state=idle`, `hold=held`, and `active_jobs=[]` only when no thread is alive and no Start/Resume/Retry is between its lock and its sheet writes. Otherwise it returns `state=active` and does not take the hold. The route is not under `/health` or `/api`. Nginx does not proxy it. The script reaches it with `docker exec` to `http://127.0.0.1:8000` inside the API container. A non-loopback peer receives 404.
+`server/app/deployment_admission.py` is ported onto the production baseline in this commit. It is not a copy of the staging orchestrator. `POST /internal/deployment-admission/hold` shares the orchestrator lock. It returns `state=idle`, `hold=held`, and `active_jobs=[]` only when no thread is alive and no Start, Resume, or Retry is between its admission entry and its worker start. Otherwise it returns `state=active` and does not take the hold. The route is not under `/health` or `/api`. Nginx does not proxy it. The script reaches it with `docker exec` to `http://127.0.0.1:8000` inside the API container. A non-loopback peer receives 404.
 
 Replacement containers set `HISTORYIT_BOOT_DEPLOY_HOLD=1` in the Compose override, not in the host `.env`. The first process in that container writes `/tmp/historyit-boot-hold-consumed` and refuses Start until smoke checks pass and the script calls the release route. A later restart of the same container keeps that file, so the old boot hold is not applied again. A newly created container has an empty filesystem and can hold. The script does not pause, resume, or start a client job. Installing `deploy_release.py` does not mean the running process has the guard; only the in-container admission response does.
 
-The process running today does not have this route. The script treats HTTP 404 from the in-container probe as an absent guard. A known active job, HTTP 500, non-JSON, or a connection or exec failure is unknown or active and stops activation. The first-install acknowledgement is accepted only for that 404, and only when `HISTORYIT_GITHUB_RUN_ID` is absent. Both deploy workflows set the run id and never set `HISTORYIT_ADMISSION_FIRST_INSTALL`. Actions cannot bypass the guard.
+The production process running today does not have this route. Staging does, after `b34f992`. The script treats HTTP 404 from the in-container probe as an absent guard. A known active job, HTTP 500, non-JSON, or a connection or exec failure is unknown or active and stops activation. The first-install acknowledgement is accepted only for that 404, and only when `HISTORYIT_GITHUB_RUN_ID` is absent. Both deploy workflows set the run id and never set `HISTORYIT_ADMISSION_FIRST_INSTALL`. Actions cannot bypass the guard.
 
-The only first install is a manual command on the staging host, after the operator has confirmed in the product UI that no inspection, commit, or validation is running. The acknowledgement does not discover a live thread and does not override an active or unexplained response. The old process cannot report a live thread, which is why 404 is the only continuable response.
+The production one-time install is a manual command on the production host, after the operator has confirmed in the product UI that no inspection, commit, or validation is running. The acknowledgement does not discover a live thread and does not override an active or unexplained response. The old process cannot report a live thread, which is why 404 is the only continuable response. Staging already passed that install for `b34f992`; do not repeat it there unless a rollback removes the route.
 
 ```bash
-cd /home/ubuntu/history-it-staging
-HISTORYIT_ENV=staging \
-HISTORYIT_SHA=<40-character-tested-sha> \
+cd /home/ubuntu/history-it
+HISTORYIT_ENV=production \
+HISTORYIT_SHA=<40-character-tested-master-sha> \
 HISTORYIT_ADMISSION_FIRST_INSTALL=I_CONFIRMED_THE_HOST_IS_IDLE \
 python3 deploy/scripts/deploy_release.py deploy
 ```
 
 Run that as `ubuntu`, not under `sudo`. The script calls `sudo -n docker` only when the daemon is not directly available, and it runs git as the current user so the checkout does not become root-owned.
 
-The SHA must already be the tip of `origin/staging`, CI for it must have succeeded, and the candidate tree must contain `server/app/deployment_admission.py`. After that process is up, a later automatic deployment runs only when `STAGING_AUTODEPLOY_ENABLED` is `true` and the running guard reports idle and the hold is acquired.
+The SHA must already be the tip of `origin/master`, CI for it must have succeeded, and the candidate tree must contain `server/app/deployment_admission.py`. After that process is up, later production deployment is still `workflow_dispatch` on `master` only. It proceeds only when the running guard reports idle and the hold is acquired. Do not dispatch that workflow as part of committing the guard.
 
-Until that manual install has happened, leave the variable unset. A staging CI completion then skips the deploy jobs and does not replace containers. A manual staging dispatch still fails closed before replacing containers.
-
-Production `workflow_dispatch` is implemented and will also fail closed. The guard is not in the `159d872` tree. Do not cherry-pick the application commit onto `master`. Production stays manual, and it stays blocked, until a separate port of the guard has been tested and is running on `ip-172-31-5-212`.
+Until that manual install has happened, a production `workflow_dispatch` fails closed before replacing containers. Leave `STAGING_AUTODEPLOY_ENABLED` unset. Staging automatic deployment stays off. Staging's verified `b34f992` deployment is already guarded; this commit does not change staging.
 
 ## Rollback
 
@@ -151,13 +149,10 @@ Exit codes: `0` deployed or restored as requested, `2` identity or usage refusal
 
 Do not merge `staging` into `master`. `master` is `159d872`, which reverts `702e229`. That merge will not put the staging application back in a controlled way.
 
-The installation is two commits, both based on `staging` `2fcc9d3`:
+Infrastructure is already on both branches. The staging guard was deployed as `b34f992`. The production guard is a separate port on `master`: `server/app/deployment_admission.py`, the Start/Resume/Retry hooks in the production `orchestrator.py` and `main.py`, `server/tests/test_deployment_admission.py`, and the status text in `docs/CICD.md` and `Tasks.md`. It does not restore `702e229` and it does not merge `staging` into `master`.
 
-1. Infrastructure only: `.github/workflows/`, `.gitattributes`, `deploy/scripts/deploy-release.sh`, `deploy/scripts/deploy_release.py`, `deploy/scripts/tests/`, `docs/CICD.md`, and the CI/CD section appended to `Tasks.md`. Cherry-pick this commit onto `master`. If `Tasks.md` conflicts, keep that branch's existing task rows and append the CI/CD section unchanged.
-2. Staging application guard only: `server/app/deployment_admission.py`, the admission hooks in `server/app/orchestrator.py` and `server/app/main.py`, and `server/tests/test_deployment_admission.py`. This commit stays on the staging line. Do not cherry-pick it onto `master`, and do not restore release `702e229` there.
-
-`master` then contains the workflows and the host script, so a push to `master` runs CI only. Production containers stay on the `159d872` application tree until a separate, coordinated deployment. Do not set `STAGING_AUTODEPLOY_ENABLED` and do not dispatch either deploy workflow as part of installing these commits.
+A push of that port to `master` runs CI only. Production containers stay on the pre-guard application until the manual install above. Do not set `STAGING_AUTODEPLOY_ENABLED` and do not dispatch either deploy workflow as part of that push.
 
 ## Later application promotion
 
-When the staging release is ready for production, do not merge the old `staging` branch into `master`. Create a release branch, revert `159d872` there, then bring across the tested staging commits, including the admission guard once staging has exercised it. Deploy that production SHA with `deploy-production.yml` only after the guard is already running on the production host and the operator has an idle window. The first production process that contains the guard still needs the same manual acknowledgement; the process it replaces does not implement the route.
+When the rest of the staging application is ready for production, do not merge `staging` into `master`. Create a release branch, revert `159d872` there, then bring across the tested staging commits. The admission guard on `master` is already the production-baseline port; do not replace it by copying the staging orchestrator. Deploy that later production SHA with `deploy-production.yml` only after the guard is already running on the production host and the operator has an idle window.

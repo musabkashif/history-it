@@ -10,6 +10,7 @@ from app.adapters import Drive, Sheets
 from app.benchmark import CHECKPOINT_SHEETS, SPECS, compare_workbooks, f01_calibration_checkpoint
 from app.inspection import Inspector
 from app.orchestrator import Orchestrator
+from app.deployment_admission import apply_boot_hold
 from app import auth
 
 DIAGNOSTICS_BUILD='2026-10-06-1'
@@ -28,6 +29,7 @@ def runtime():
  os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = settings.google_application_credentials
  settings.validate_live()
  sheets=Sheets(); drive=Drive(); _runtime=Orchestrator(sheets,drive,Inspector(settings,drive),settings)
+ apply_boot_hold(_runtime)
  return _runtime
 
 def live():
@@ -62,6 +64,29 @@ def google_error(_request:Request,exc:HttpError):
 
 @app.get('/health')
 def health():return {'status':'ok','service':'historyit-archive-mvp','configured':bool(settings.openai_model and settings.google_application_credentials),'diagnostics_build':DIAGNOSTICS_BUILD,'diagnostics_dir':str(__import__('pathlib').Path(settings.diagnostics_dir).resolve()),'login_configured':auth.login_configured(settings)}
+
+def _require_loopback(request: Request) -> None:
+ """Host deploy probe only. Nginx does not publish this path.
+
+ docker exec reaches uvicorn as 127.0.0.1. Any other peer, including the
+ Compose network, gets a 404 so worker state is not a public health field.
+ """
+ peer = request.client.host if request.client else ''
+ if peer not in ('127.0.0.1', '::1'):
+  raise HTTPException(404, 'Not Found')
+
+@app.get('/internal/deployment-admission')
+def deployment_admission_status(request: Request):
+ _require_loopback(request)
+ return call(live().deployment_status)
+@app.post('/internal/deployment-admission/hold')
+def deployment_admission_hold(request: Request):
+ _require_loopback(request)
+ return call(live().deployment_hold)
+@app.post('/internal/deployment-admission/release')
+def deployment_admission_release(request: Request):
+ _require_loopback(request)
+ return call(live().deployment_release)
 
 @app.post('/api/auth/login')
 def login(req: LoginRequest, request: Request, response: Response):
