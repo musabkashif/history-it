@@ -202,6 +202,290 @@ class AuthorizedRuleTests(unittest.TestCase):
         self.assertEqual(box_status(rows, ['F01', 'F02', 'F03', 'F04', 'F05', 'F06'], 'None', live['Itemization']), 'In Progress')
 
 
+class QcCorrectionTests(unittest.TestCase):
+    """Deterministic mapping of mocked inspection rows. These do not prove model vision."""
+
+    def test_prompt_keeps_the_governing_distinctions(self):
+        text = decision_instructions()
+        self.assertIn('descriptive inventory', text)
+        self.assertIn('not Research Notes', text)
+        self.assertIn('excess black capture background', text)
+        self.assertIn('slight archival edge', text)
+        self.assertIn('180-degree', text)
+        self.assertNotIn('F04_004', text)
+        self.assertNotIn('Photograph_016b', text)
+
+    def test_context_inventory_and_blank_verso_are_one_metadata_reference(self):
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[
+                asset('caption-sheet.jpg', 'reference', action='Rotate'),
+                asset('caption-verso.jpg', 'reference', action='Rotate'),
+            ],
+            records=[record('reference', template='Document', type_name='Research Notes', readiness='Ready')],
+        ))
+        output.records[0].further_detail = (
+            'Descriptive inventory that describes the surrounding photographs and functions as context. '
+            'The sheet lists citations for those items.'
+        )
+        output.assets[1].qc_note = 'Blank verso.'
+        apply_governing_constraints(output)
+        row = output.records[0]
+        self.assertEqual(row.record_kind, 'Metadata Only')
+        self.assertEqual(row.template, 'Metadata Only')
+        self.assertEqual(row.type, '')
+        self.assertEqual(row.metadata_readiness, 'Metadata Reference')
+        self.assertEqual(row.production_task_count, '0')
+        self.assertTrue(all(item.action_needed == 'N/A' for item in output.assets))
+        self.assertTrue(all(item.queue_eligible == 'No' for item in output.assets))
+
+    def test_collection_research_notes_and_blank_verso_stay_a_normal_record(self):
+        front = asset('notes.jpg', 'notes', action='No Adjustment')
+        verso = asset('notes-verso.jpg', 'notes', action='Rotate')
+        verso.qc_note = 'Blank verso.'
+        notes = record('notes', kind='Metadata Only', template='Metadata Only', type_name='', readiness='Metadata Reference')
+        notes.further_detail = 'Typed citation index and its verso are the collection item.'
+        output = apply_governing_constraints(InspectionOutput(assets=[front, verso], records=[notes]))
+        row = output.records[0]
+        self.assertEqual(row.record_kind, 'Normal Odyssey')
+        self.assertEqual(row.template, 'Document')
+        self.assertEqual(row.type, 'Research Notes')
+        self.assertEqual(output.assets[1].action_needed, 'No Adjustment')
+        self.assertEqual(output.assets[1].queue_eligible, 'No')
+        self.assertEqual(row.production_task_count, '0')
+        self.assertNotEqual(row.metadata_readiness, 'Metadata Reference')
+
+    def test_a_sheet_that_supports_one_item_is_not_forced_to_metadata_only(self):
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[asset('print.jpg', 'photo', action='No Adjustment')],
+            records=[record('photo', template='Photographic Image', type_name='Photograph')],
+        ))
+        output.records[0].further_detail = 'Descriptive sheet associated with this one photograph; stays with this item.'
+        apply_governing_constraints(output)
+        self.assertEqual(output.records[0].record_kind, 'Normal Odyssey')
+        self.assertEqual(output.records[0].template, 'Photographic Image')
+
+    def test_excess_capture_background_keeps_the_crop_and_blocks_readiness(self):
+        page = asset('page.jpg', 'page', action='Archival Border Crop')
+        page.qc_note = 'Excess black capture background surrounds the page.'
+        page.required_crop_standard = 'Archival Border'
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[page],
+            records=[record('page', template='Document', type_name='Report', readiness='Ready')],
+        ))
+        self.assertEqual(output.assets[0].action_needed, 'Archival Border Crop')
+        self.assertEqual(output.assets[0].required_crop_standard, 'Archival Border')
+        self.assertEqual(output.assets[0].qc_status, 'Action Required')
+        self.assertEqual(output.assets[0].queue_eligible, 'Yes')
+        self.assertEqual(output.records[0].metadata_readiness, 'Blocked - Cropping/QC')
+        self.assertEqual(output.records[0].production_task_count, '1')
+
+    def test_a_compliant_archival_edge_does_not_create_a_crop_task(self):
+        print_asset = asset('print.jpg', 'photo', action='Archival Border Crop')
+        print_asset.qc_note = 'A slight archival edge surrounds the print.'
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[print_asset],
+            records=[record('photo', template='Photographic Image', type_name='Photograph', readiness='Ready')],
+        ))
+        self.assertEqual(output.assets[0].action_needed, 'No Adjustment')
+        self.assertEqual(output.assets[0].required_crop_standard, 'Archival Border')
+        self.assertEqual(output.assets[0].qc_status, 'Pass')
+        self.assertEqual(output.assets[0].queue_eligible, 'No')
+        self.assertEqual(output.records[0].metadata_readiness, 'Ready')
+        self.assertEqual(output.records[0].production_task_count, '0')
+
+    def test_naming_the_standard_alone_does_not_create_a_crop_task(self):
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[asset('page.jpg', 'page', action='No Adjustment')],
+            records=[record('page', readiness='Ready')],
+        ))
+        output.assets[0].required_crop_standard = 'Archival Border'
+        apply_governing_constraints(output)
+        self.assertEqual(output.assets[0].action_needed, 'No Adjustment')
+        self.assertEqual(output.assets[0].queue_eligible, 'No')
+        self.assertEqual(output.records[0].metadata_readiness, 'Ready')
+
+    def test_required_rotation_is_kept_and_upright_blank_and_uncertain_controls_are_not(self):
+        turned = asset('print.jpg', 'turned', action='Rotate')
+        upright = asset('upright.jpg', 'upright', action='No Adjustment')
+        blank = asset('blank.jpg', 'blank', action='Rotate')
+        layout = asset('layout.jpg', 'layout', action='No Adjustment')
+        unsure = asset('unsure.jpg', 'unsure', action='Review')
+        turned.qc_note = 'The print is 180 degrees from upright.'
+        upright.qc_note = 'The photograph is upright.'
+        blank.qc_note = 'Blank image.'
+        layout.qc_note = 'Intentional layout, already upright.'
+        unsure.qc_note = 'Orientation cannot be determined.'
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[turned, upright, blank, layout, unsure],
+            records=[
+                record('turned', template='Photographic Image', type_name='Photograph', readiness='Ready'),
+                record('upright', template='Photographic Image', type_name='Photograph', readiness='Ready'),
+                record('blank', template='Photographic Image', type_name='Photograph', readiness='Ready'),
+                record('layout', template='Photographic Image', type_name='Photograph', readiness='Ready'),
+                record('unsure', template='Photographic Image', type_name='Photograph', readiness='Review'),
+            ],
+        ))
+        self.assertEqual(output.assets[0].action_needed, 'Rotate')
+        self.assertEqual(output.assets[0].queue_eligible, 'Yes')
+        self.assertEqual(output.records[0].metadata_readiness, 'Blocked - Cropping/QC')
+        self.assertEqual(output.assets[1].action_needed, 'No Adjustment')
+        self.assertEqual(output.assets[1].queue_eligible, 'No')
+        self.assertEqual(output.records[1].metadata_readiness, 'Ready')
+        self.assertEqual(output.assets[2].action_needed, 'No Adjustment')
+        self.assertEqual(output.assets[2].queue_eligible, 'No')
+        self.assertEqual(output.assets[3].action_needed, 'No Adjustment')
+        self.assertEqual(output.assets[4].action_needed, 'Review')
+        self.assertEqual(output.assets[4].queue_eligible, 'No')
+        self.assertEqual(output.records[4].metadata_readiness, 'Review')
+
+    def test_same_batch_context_keeps_the_reference_separate_from_the_document(self):
+        sheet = asset('caption-sheet.jpg', 'reference', action='Rotate')
+        verso = asset('caption-verso.jpg', 'reference', action='Rotate')
+        letter_asset = asset('letter.jpg', 'letter', action='Archival Border Crop')
+        letter_verso = asset('letter-verso.jpg', 'letter', action='No Adjustment')
+        verso.qc_note = 'Blank verso.'
+        letter_asset.qc_note = 'Excess black capture background surrounds the letter.'
+        letter_verso.qc_note = 'Blank verso.'
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[sheet, verso, letter_asset, letter_verso],
+            records=[
+                record('reference', template='Document', type_name='Research Notes'),
+                record('letter', template='Correspondence', type_name='Letter', readiness='Ready'),
+            ],
+        ))
+        output.records[0].further_detail = 'Descriptive inventory that describes the surrounding items and functions as context.'
+        apply_governing_constraints(output)
+        reference = output.records[0]
+        letter = output.records[1]
+        self.assertEqual(reference.record_kind, 'Metadata Only')
+        self.assertEqual(reference.production_task_count, '0')
+        self.assertEqual(letter.record_kind, 'Normal Odyssey')
+        self.assertEqual(letter.type, 'Letter')
+        self.assertEqual(output.assets[2].action_needed, 'Archival Border Crop')
+        self.assertEqual(letter.metadata_readiness, 'Blocked - Cropping/QC')
+        self.assertEqual({row.assigned_record_id for row in output.assets[:2]}, {'reference'})
+        self.assertEqual({row.assigned_record_id for row in output.assets[2:]}, {'letter'})
+
+    def test_a_later_batch_does_not_reclassify_the_continued_document(self):
+        letter_asset = asset('letter.jpg', 'letter', action='Archival Border Crop')
+        letter_asset.qc_note = 'Excess black capture background surrounds the letter.'
+        first = apply_governing_constraints(InspectionOutput(
+            assets=[letter_asset],
+            records=[record('letter', template='Correspondence', type_name='Letter', readiness='Ready', boundary='Open')],
+        ))
+        second = apply_governing_constraints(InspectionOutput(
+            assets=[
+                asset('letter-verso.jpg', 'letter', action='No Adjustment'),
+                asset('caption-sheet.jpg', 'reference', action='Rotate'),
+                asset('caption-verso.jpg', 'reference', action='Rotate'),
+            ],
+            records=[
+                record('letter', template='Correspondence', type_name='Letter', readiness='Ready'),
+                record('reference', template='Document', type_name='Research Notes'),
+            ],
+        ))
+        second.records[0].further_detail = 'Next page of the same letter continued from the prior open item.'
+        second.records[0].review_note = 'prior_open_item continues this physical item.'
+        second.assets[0].qc_note = 'Blank verso.'
+        second.records[1].further_detail = 'Descriptive inventory that describes the surrounding photographs and functions as context.'
+        second.assets[2].qc_note = 'Blank verso.'
+        apply_governing_constraints(second)
+        self.assertEqual(first.records[0].metadata_readiness, 'Blocked - Cropping/QC')
+        self.assertEqual(second.records[0].record_kind, 'Normal Odyssey')
+        self.assertEqual(second.records[0].type, 'Letter')
+        self.assertEqual(second.assets[0].action_needed, 'No Adjustment')
+        self.assertEqual(second.records[1].record_kind, 'Metadata Only')
+        self.assertEqual(second.records[1].production_task_count, '0')
+
+    def test_crop_and_rotation_survive_staging(self):
+        page = asset('page.jpg', 'page', action='Archival Border Crop')
+        turned = asset('print.jpg', 'print', action='Rotate')
+        compliant = asset('compliant.jpg', 'compliant', action='No Adjustment')
+        page.qc_note = 'Excess black capture background surrounds the page.'
+        page.required_crop_standard = 'Archival Border'
+        turned.qc_note = 'The print is 180 degrees from upright.'
+        compliant.qc_note = 'A slight archival edge surrounds the print.'
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[page, turned, compliant],
+            records=[
+                record('page', readiness='Ready'),
+                record('print', template='Photographic Image', type_name='Photograph', readiness='Ready'),
+                record('compliant', template='Photographic Image', type_name='Photograph', readiness='Ready'),
+            ],
+        ))
+        sheets = MemorySheets()
+        install_job(sheets, [queue_row(names=['page.jpg', 'print.jpg', 'compliant.jpg'])])
+        Orchestrator(sheets, None, CapturingInspector(output=output), Settings()).run('HIT-1')
+        tasks = sheets.rows('register', 'Production Queue')
+        self.assertEqual(sorted(row['Digital Asset'] for row in tasks), ['page.jpg', 'print.jpg'])
+        self.assertEqual(sorted(row['Action Needed'] for row in tasks), ['Archival Border Crop', 'Rotate'])
+        staged = {row['Digital Asset']: row for row in sheets.rows('register', 'Asset QC')}
+        self.assertEqual(staged['page.jpg']['QC Status'], 'Action Required')
+        self.assertEqual(staged['print.jpg']['Action Needed'], 'Rotate')
+        self.assertEqual(staged['compliant.jpg']['Action Needed'], 'No Adjustment')
+        committed = sheets.rows('register', 'Itemization') + sheets.rows('register', 'Record Staging')
+
+        def readiness_for(name):
+            for row in committed:
+                assets = ' '.join(row.get(field) or '' for field in (
+                    'Digital Assets', 'New Batch Assets', 'Full Record Assets After Commit',
+                ))
+                if name in assets:
+                    return row.get('Metadata Readiness')
+            return ''
+
+        self.assertEqual(readiness_for('page.jpg'), 'Blocked - Cropping/QC')
+        self.assertEqual(readiness_for('print.jpg'), 'Blocked - Cropping/QC')
+        self.assertEqual(readiness_for('compliant.jpg'), 'Ready')
+
+    def test_negated_keywords_do_not_override_the_stated_decision(self):
+        denied_crop = asset('page.jpg', 'page', action='Archival Border Crop')
+        denied_crop.qc_note = 'No excess background; a slight border remains.'
+        denied_crop.required_crop_standard = 'Archival Border'
+        real_crop = asset('wide.jpg', 'wide', action='Archival Border Crop')
+        real_crop.qc_note = 'No slight edge. Excess black capture background surrounds the page.'
+        real_crop.required_crop_standard = 'Archival Border'
+        denied_inventory = record('notes', kind='Metadata Only', template='Metadata Only', type_name='', readiness='Metadata Reference')
+        denied_inventory.further_detail = 'Typed citation index. This sheet is not a descriptive inventory.'
+        affirmed_inventory = record('reference', template='Document', type_name='Research Notes')
+        affirmed_inventory.further_detail = (
+            'Not associated with this one item. Descriptive inventory that describes the surrounding photographs and functions as context.'
+        )
+        not_blank = asset('print.jpg', 'turned', action='Rotate')
+        not_blank.qc_note = 'The print is not blank.'
+        blank_turned = asset('back.jpg', 'turned180', action='Rotate')
+        blank_turned.qc_note = 'Blank verso. The print is 180 degrees from upright.'
+        unsure = asset('unsure.jpg', 'unsure', action='Rotate')
+        unsure.qc_note = 'Orientation cannot be determined.'
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[denied_crop, real_crop, not_blank, blank_turned, unsure],
+            records=[
+                record('page', template='Document', type_name='Report', readiness='Ready'),
+                record('wide', template='Document', type_name='Report', readiness='Ready'),
+                denied_inventory,
+                affirmed_inventory,
+                record('turned', template='Photographic Image', type_name='Photograph', readiness='Ready'),
+                record('turned180', template='Photographic Image', type_name='Photograph', readiness='Ready'),
+                record('unsure', template='Photographic Image', type_name='Photograph', readiness='Ready'),
+            ],
+        ))
+        self.assertEqual(output.assets[0].action_needed, 'No Adjustment')
+        self.assertEqual(output.assets[0].queue_eligible, 'No')
+        self.assertEqual(output.records[0].metadata_readiness, 'Ready')
+        self.assertEqual(output.assets[1].action_needed, 'Archival Border Crop')
+        self.assertEqual(output.records[1].metadata_readiness, 'Blocked - Cropping/QC')
+        self.assertEqual(output.records[2].record_kind, 'Normal Odyssey')
+        self.assertEqual(output.records[2].type, 'Research Notes')
+        self.assertEqual(output.records[3].record_kind, 'Metadata Only')
+        self.assertEqual(output.records[3].production_task_count, '0')
+        self.assertEqual(output.assets[2].action_needed, 'Rotate')
+        self.assertEqual(output.records[4].metadata_readiness, 'Blocked - Cropping/QC')
+        self.assertEqual(output.assets[3].action_needed, 'Rotate')
+        self.assertEqual(output.assets[4].action_needed, 'Review')
+        self.assertEqual(output.assets[4].queue_eligible, 'No')
+        self.assertEqual(output.records[6].metadata_readiness, 'Review')
+
+
 class ParentDiscoveryTests(unittest.TestCase):
     def test_parent_only_authorization_orders_f01_through_f06_and_skips_delhivery(self):
         names = ['F06', 'F01', 'F03', 'F02', 'F05', 'F04']

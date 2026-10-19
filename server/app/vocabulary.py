@@ -7,6 +7,8 @@ the same meaning.
 """
 from __future__ import annotations
 
+import re
+
 TEMPLATES = frozenset({
     'Artwork', 'Publication', 'Clipping',
     'Correspondence', 'Diary/Journal', 'Ephemera',
@@ -162,14 +164,77 @@ def _append_detail(record, sentence: str):
     record.further_detail = f'{current} {sentence}'.strip()
 
 
+_CLAUSE_BREAK = re.compile(r'[.!?;:]')
+_NEGATION_SUFFIX = re.compile(
+    r'(?:^|\s)(?:no|not|without|absent|lacks?|none)\b(?:\s+[a-z]+){0,4}\s*$'
+)
+
+
+def _affirmed(text: str, phrase: str) -> bool:
+    """True when phrase is a whole word outside a negated clause such as 'no excess'."""
+    haystack = collapse(text).casefold()
+    needle = collapse(phrase).casefold()
+    if not needle:
+        return False
+    start = 0
+    while True:
+        index = haystack.find(needle, start)
+        if index < 0:
+            return False
+        end = index + len(needle)
+        bounded = (index == 0 or not haystack[index - 1].isalnum()) and (end == len(haystack) or not haystack[end].isalnum())
+        if bounded and not _negated(haystack, index):
+            return True
+        start = end
+
+
+def _negated(text: str, index: int) -> bool:
+    clause = _CLAUSE_BREAK.split(text[max(0, index - 48):index])[-1]
+    if re.search(r'(?:^|\s)non-$', clause):
+        return True
+    return _NEGATION_SUFFIX.search(clause) is not None
+
+
+def _context_inventory(blob: str) -> bool:
+    """A sheet that describes surrounding items as context, not one item's research notes."""
+    text = collapse(blob).casefold()
+    if any(_affirmed(text, phrase) for phrase in (
+        'associated with this one', 'supports this one', 'attached to this item', 'stays with this item',
+    )):
+        return False
+    return any(_affirmed(text, phrase) for phrase in (
+        'descriptive inventory', 'describes the surrounding', 'describe the surrounding',
+        'functions as context', 'function as context', 'context-only capture',
+    ))
+
+
+def _blank_without_orientation(note: str) -> bool:
+    text = collapse(note).casefold()
+    if not _affirmed(text, 'blank'):
+        return False
+    return not any(_affirmed(text, token) for token in ('180', 'upside down', 'upside', 'inverted', 'sideways'))
+
+
+def _orientation_uncertain(note: str) -> bool:
+    text = collapse(note).casefold()
+    return _affirmed(text, 'cannot be determined') or _affirmed(text, 'orientation is uncertain') or _affirmed(text, 'uncertain orientation')
+
+
+def _fails_archival_border(note: str) -> bool:
+    text = collapse(note).casefold()
+    return any(_affirmed(text, phrase) for phrase in (
+        'excessive', 'excess', 'large background', 'substantial', 'most of the frame',
+        'capture background', 'black field',
+    ))
+
+
 def _margin_only(note: str) -> bool:
-    """A named margin is not a crop unless the note also gives a real defect."""
+    """A slight edge is not a crop. Excess capture background is a real defect."""
     text = collapse(note).casefold()
     if not text:
         return False
-    if any(word in text for word in (
-        'excessive', 'large background', 'substantial', 'most of the frame', 'cut off', 'clipped',
-        'split', 'spread', 'two pages', 'two-page', 'skewed', 'crooked',
+    if _fails_archival_border(text) or any(word in text for word in (
+        'cut off', 'clipped', 'split', 'spread', 'two pages', 'two-page', 'skewed', 'crooked',
     )):
         return False
     return any(word in text for word in ('border', 'margin', 'surround', 'background'))
@@ -206,7 +271,7 @@ def apply_authorized_rules(output):
             record.record_kind = 'Normal Odyssey'
             record.template = 'Ledger'
         research = any(word in blob for word in ('research note', 'research index', 'citation index', 'citation'))
-        if research and not any(word in blob for word in ('file folder', 'manila')):
+        if research and not _context_inventory(blob) and not any(word in blob for word in ('file folder', 'manila')):
             record.record_kind = 'Normal Odyssey'
             record.template = 'Document'
             record.type = 'Research Notes'
@@ -233,6 +298,10 @@ def apply_authorized_rules(output):
         elif publication and (('magazine' in blob) or ('periodical' in blob) or ('publication issue' in blob)) and 'newspaper' not in blob and 'newsprint' not in blob:
             record.template = 'Publication'
             record.type = 'Magazine'
+        if _context_inventory(blob) and 'scrapbook' not in blob:
+            record.record_kind = 'Metadata Only'
+            record.template = 'Metadata Only'
+            record.type = ''
         bound_book = notebook or (record.template == 'Document' and record.type == 'Biographical Notes') or record.template == 'Ledger'
         record_note = _blob(record.review_note, record.further_detail)
         mounted_on_final = 'mounted photograph' in record_note and 'final' in record_note
@@ -258,8 +327,11 @@ def apply_authorized_rules(output):
                 elif not bound_book:
                     asset.required_crop_standard = 'Tight Border'
             elif record.template in {'Document', 'Correspondence'} and not bound_book and asset.action_needed == 'Archival Border Crop':
-                asset.action_needed = 'Crop / Recrop'
-                asset.required_crop_standard = 'Tight Border'
+                if _fails_archival_border(asset_blob):
+                    asset.required_crop_standard = 'Archival Border'
+                else:
+                    asset.action_needed = 'Crop / Recrop'
+                    asset.required_crop_standard = 'Tight Border'
             elif record.template in {'Document', 'Correspondence'} and not bound_book and asset.action_needed == 'No Adjustment' and asset.required_crop_standard == 'Archival Border':
                 asset.required_crop_standard = 'Tight Border'
             elif asset.action_needed == 'No Adjustment' and _is_photographic_print(asset_blob, record):
@@ -269,6 +341,15 @@ def apply_authorized_rules(output):
                     asset.action_needed = 'Crop / Recrop'
                 if asset.action_needed == 'Crop / Recrop' and asset.required_crop_standard in {'', 'Page Edge', 'Publication Page Edge'}:
                     asset.required_crop_standard = 'Book Page Edge'
+            if asset.action_needed == 'Rotate' and _orientation_uncertain(asset_blob):
+                asset.action_needed = 'Review'
+            elif asset.action_needed == 'Rotate' and _blank_without_orientation(asset_blob):
+                asset.action_needed = 'No Adjustment'
+        if any(asset.action_needed == 'Review' and _orientation_uncertain(_blob(asset.qc_note, asset.task_note)) for asset in owned):
+            queued = any(asset.action_needed in QUEUE_ACTIONS for asset in owned)
+            if not queued and record.metadata_readiness in {'', 'Ready', 'Blocked - Cropping/QC'}:
+                record.metadata_readiness = 'Review'
+                record.record_action_needed = 'Review'
     return output
 
 
