@@ -27,3 +27,22 @@ Deployed at 702e229; production smoke checks passed. Confirmed from supplied EC2
 | **P3** | Batch-size/cost optimization, **quality stable hone ke baad** | Client | Deferred; 27-image call tested |
 | **Proposed** | Folder/Sheet **links accept karke IDs automatically extract** karna | Aapka chosen improvement (now authorized to implement) | Deployed at 702e229; production smoke checks passed. Staging UAT pending. Change: authoritative backend `google_ids` normalization for Drive folders + Sheets; create/authorize/benchmark models; accessibility/type gates before writes; resourcekey/spoof/export rejected. Files: `server/app/google_ids.py`, `models.py`, `orchestrator.py`, `adapters.py`, `NewJob.tsx`, `Job.tsx`, `test_google_ids.py`. |
 | **Proposed** | Per-run approved model selection aur saved run configuration | Aapka next-phase proposal | Client approval not explicit |
+
+## CI/CD
+
+Runners are installed and online. Confirmed from supplied host output, not from a GitHub Actions run:
+
+| Environment | Host | Runner service | Labels |
+|---|---|---|---|
+| Production | `ip-172-31-5-212` (`13.62.111.185`), checkout `/home/ubuntu/history-it`, Compose project `history-it` | `/home/ubuntu/actions-runner` | `self-hosted`, `linux`, `x64`, `historyit-prod` |
+| Staging | `ip-172-31-6-193` (`56.228.63.165`), checkout `/home/ubuntu/history-it-staging` at `2fcc9d3`, Compose project `historyit-staging` | `/home/ubuntu/actions-runner` | `self-hosted`, `linux`, `x64`, `historyit-staging` |
+
+Workflows and `deploy/scripts/deploy_release.py` are the infrastructure commit. The admission guard is a separate staging-only commit. Neither commit replaces containers. `STAGING_AUTODEPLOY_ENABLED` is not set. Automatic staging deployment runs only when that repository variable is exactly `true`; an absent or other value skips it. The variable holds no credential. Manual staging `workflow_dispatch` remains available and still uses the admission checks. A push to `master` runs CI only.
+
+Local validation passed in this workspace on 2026-10-19 before these commits: deployment contract tests (32), backend `pytest` (176 passed), and the frontend production build (`tsc --noEmit` and Vite). These were not GitHub Actions runs. GitHub Actions execution is pending until the commits are pushed. The frontend CI job uses Node 22. Staging deployment verification is pending. Production deployment verification is pending.
+
+Safe staging automation is not enabled. The process on the staging host has no deployment admission guard. Container `/health` does not report live workers. The guard commit is not installed in the running containers. Absent, active, or unexplained admission fails closed. The first-install acknowledgement cannot override those responses, and neither deploy workflow sets it. A rollback to the current pre-guard release reports that guarded automatic deployment is not available. That conclusion comes from the live probe, not from the deploy script being present.
+
+Manual production deployment is not safe to enable. Production remains the `159d872` rollback (application tree `faa561a`) and has no admission guard. `deploy-production.yml` is `workflow_dispatch` on `master` only and will refuse activation until a staging-proven guard is running on that host during a coordinated idle window. Release `702e229` is not restored on `master`.
+
+Existing task rows above were not changed. Details: `docs/CICD.md`.

@@ -1,0 +1,116 @@
+name: Deploy staging
+
+# Automatic deployment is a completed CI workflow_run, not a push and not a
+# pull request. GitHub reads this file from the default branch. The self-hosted
+# job stays skipped unless every condition below is true.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [staging]
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Deploy the selected staging commit
+        required: true
+        type: choice
+        options:
+          - deploy
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: deploy-historyit-staging
+  cancel-in-progress: false
+
+jobs:
+  auto-gate:
+    name: Accept the successful staging push CI run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    if: github.event_name == 'workflow_run' && github.repository == 'musabkashif/history-it' && vars.STAGING_AUTODEPLOY_ENABLED == 'true' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'staging' && github.event.workflow_run.head_repository.full_name == 'musabkashif/history-it' && github.event.workflow_run.head_repository.fork == false
+    outputs:
+      sha: ${{ steps.checked.outputs.sha }}
+    steps:
+      - name: Check out the tested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Reject every run except this repository's successful staging push
+        id: checked
+        env:
+          HISTORYIT_REPOSITORY: ${{ github.repository }}
+          STAGING_AUTODEPLOY_ENABLED: ${{ vars.STAGING_AUTODEPLOY_ENABLED }}
+          HISTORYIT_CI_EVENT: ${{ github.event.workflow_run.event }}
+          HISTORYIT_CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HISTORYIT_CI_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HISTORYIT_SHA: ${{ github.event.workflow_run.head_sha }}
+          HISTORYIT_HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          HISTORYIT_HEAD_FORK: ${{ github.event.workflow_run.head_repository.fork }}
+        run: python deploy/scripts/deploy_release.py accept-staging-auto && echo "sha=${HISTORYIT_SHA}" >> "$GITHUB_OUTPUT"
+
+  manual-gate:
+    name: Verify CI for a manual staging deployment
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'musabkashif/history-it' && github.ref == 'refs/heads/staging' && github.event.inputs.confirm == 'deploy' && github.event.repository.fork == false
+    outputs:
+      sha: ${{ steps.checked.outputs.sha }}
+    steps:
+      - name: Check out the selected staging commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Wait until CI succeeded for this SHA
+        id: checked
+        env:
+          HISTORYIT_SHA: ${{ github.sha }}
+          HISTORYIT_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: python deploy/scripts/deploy_release.py wait-for-ci && echo "sha=${HISTORYIT_SHA}" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Deploy staging
+    needs: [auto-gate, manual-gate]
+    runs-on: [self-hosted, linux, x64, historyit-staging]
+    timeout-minutes: 60
+    if: always() && github.repository == 'musabkashif/history-it' && ((needs.auto-gate.result == 'success' && github.event_name == 'workflow_run' && vars.STAGING_AUTODEPLOY_ENABLED == 'true' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'staging' && github.event.workflow_run.head_repository.full_name == 'musabkashif/history-it' && github.event.workflow_run.head_repository.fork == false) || (needs.manual-gate.result == 'success' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/staging' && github.event.inputs.confirm == 'deploy' && github.event.repository.fork == false))
+    steps:
+      - name: Check out the tested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+      - name: Reject an automatic run that is not the tested staging push
+        if: github.event_name == 'workflow_run'
+        env:
+          HISTORYIT_REPOSITORY: ${{ github.repository }}
+          STAGING_AUTODEPLOY_ENABLED: ${{ vars.STAGING_AUTODEPLOY_ENABLED }}
+          HISTORYIT_CI_EVENT: ${{ github.event.workflow_run.event }}
+          HISTORYIT_CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HISTORYIT_CI_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HISTORYIT_SHA: ${{ github.event.workflow_run.head_sha }}
+          HISTORYIT_HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          HISTORYIT_HEAD_FORK: ${{ github.event.workflow_run.head_repository.fork }}
+        run: python3 deploy/scripts/deploy_release.py accept-staging-auto
+      - name: Activate the tested commit
+        env:
+          HISTORYIT_ENV: staging
+          HISTORYIT_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          HISTORYIT_REPOSITORY: ${{ github.repository }}
+          HISTORYIT_GITHUB_RUN_ID: ${{ github.run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 deploy/scripts/deploy_release.py deploy
