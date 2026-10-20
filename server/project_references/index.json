@@ -7,6 +7,12 @@
       "box": "Chapters Box 19",
       "folders": ["F01", "F02"],
       "file": "tri-delta-chapters-f01-calibration.json"
+    },
+    {
+      "project": "Tri Delta Chapters",
+      "box": "Chapters Box 31",
+      "folders": ["F04"],
+      "file": "tri-delta-chapters-box31-f04-calibration.json"
     }
   ]
 }

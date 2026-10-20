@@ -18,6 +18,7 @@
 | Next authorized folder | `POST /api/jobs/{job_id}/folders` enumerates one folder onto the existing job and does not start inspection | `tests/test_workflow.py` |
 | Frozen benchmark | read only by the compare endpoint; F01 calibration is a labeled example, not a workbook extract | No benchmark write path |
 | F01 calibration | `project_references/tri-delta-chapters-f01-calibration.json` version `2026-10-07.1`, loaded for F01 and F02 only; contradictions stop before commit | `tests/test_workflow.py` |
+| Box 31 F04 calibration | `project_references/tri-delta-chapters-box31-f04-calibration.json` version `2026-10-20.1`, loaded for Tri Delta Chapters / Chapters Box 31 / F04 only; `_004`/`_005` guidance, Photograph 009 stays a normal record; a combined record stops before commit | `tests/test_workflow.py` |
 
 ## Live-only material
 The four governing packet documents are included in `governing/` and are copied by the updater when missing. Google Drive/Sheets IDs, service-account credentials, OpenAI credentials, and a live Developer Test register are not available in this build environment, so live Box 19 execution and benchmark reconciliation remain deployment gates. No archival rules were invented to replace client material.

@@ -1,0 +1,32 @@
+{
+  "reference_id": "tri-delta-chapters-box31-f04-calibration",
+  "version": "2026-10-20.1",
+  "material_class": "client-approved-calibration-example",
+  "approval": "client-approved",
+  "not_an_executable_rule": true,
+  "project": "Tri Delta Chapters",
+  "box": "Chapters Box 31",
+  "applies_to_folders": ["F04"],
+  "scope_limit": "This example is project calibration for Tri Delta Chapters, Chapters Box 31, folder F04 only. It does not decide Box 19, other Box 31 folders, or other projects. It does not rewrite inspection output from filenames.",
+  "statement": "CLIENT-APPROVED CALIBRATION EXAMPLE for Tri Delta Chapters, Chapters Box 31, folder F04. The authority is the client's explicit correction for this pair. This is inspection guidance, not a filename rule and not an instruction to rewrite a model answer. Inspect every authorized image. Use the example only when the visual evidence agrees. If the images disagree, follow the images and explain the evidence. TriDelta_Year2_Chapters_Box31_F04_Photograph_009a.jpg, Photograph_009b.jpg, and Photograph_009c.jpg are a separate photographic print and remain Normal Odyssey collection material. Do not place that print on this reference, and do not turn the print into Metadata Only to match the example. A descriptive sheet that supports one specific item still stays with that item. This example does not change that general rule.",
+  "examples": [
+    {
+      "example_id": "f04-descriptive-reference",
+      "label": "Client-approved calibration example, not an executable filename rule",
+      "filenames": [
+        "TriDelta_Year2_Chapters_Box31_F04_004.jpg",
+        "TriDelta_Year2_Chapters_Box31_F04_005.jpg"
+      ],
+      "reasoning": "The client's explicit correction is that 004 and 005 are one Metadata Only descriptive reference sheet and its blank verso, with no production task. They are not part of Photograph_009a/b/c. That print stays a Normal Odyssey collection record. A response that keeps 004 and 005 on the photograph record contradicts this example. Do not convert the photograph wholesale into Metadata Only.",
+      "outcome": {
+        "record_kind": "Metadata Only",
+        "template": "Metadata Only",
+        "type": "",
+        "reference_role": "Descriptive Reference",
+        "metadata_readiness": "Metadata Reference",
+        "boundary_state": "Closed",
+        "production_tasks": "none"
+      }
+    }
+  ]
+}

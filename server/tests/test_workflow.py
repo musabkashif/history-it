@@ -9,11 +9,12 @@ from PIL import Image
 
 from app.authorization import RegisterStateError, authorized_manifest, manifest_filenames
 from app.benchmark import compare_workbooks
+from app.decisions import decision_instructions
 from app.diagnostics import Diagnostics
 from app.images import prepare_model_image
 from app.models import ASSET_HEADERS, RECORD_HEADERS, AssetRow, InspectionOutput, JobCreate, RecordRow, Source
 from app.orchestrator import Orchestrator
-from app.references import reference_mismatches, resolve_reference
+from app.references import order_records, reference_mismatches, resolve_reference
 from client_reference.commit_engine import plan_commit
 
 
@@ -701,6 +702,35 @@ def f02_name():
     return 'TriDelta_Year2_Chapters_Box19_F02_001.jpg'
 
 
+BOX31_SHEET = 'TriDelta_Year2_Chapters_Box31_F04_004.jpg'
+BOX31_VERSO = 'TriDelta_Year2_Chapters_Box31_F04_005.jpg'
+BOX31_PHOTOS = (
+    'TriDelta_Year2_Chapters_Box31_F04_Photograph_009a.jpg',
+    'TriDelta_Year2_Chapters_Box31_F04_Photograph_009b.jpg',
+    'TriDelta_Year2_Chapters_Box31_F04_Photograph_009c.jpg',
+)
+
+
+def box31_batch(names):
+    row = queue_row(names=list(names), **{'Box': 'Chapters Box 31', 'Source Group / Folder': 'F04'})
+    row['Notes'] = json.dumps({'manifest': manifest(list(names), 'F04')})
+    return row
+
+
+def box31_asset(filename, record_id, action='No Adjustment'):
+    return AssetRow.model_validate(filled(ASSET_HEADERS, **{
+        'Digital Asset': filename, 'Assigned Record ID': record_id, 'Action Needed': action,
+    }))
+
+
+def box31_record(record_id, kind, template, type_name='', readiness='Ready', role='', confidence='High'):
+    return RecordRow.model_validate(filled(RECORD_HEADERS, **{
+        'Proposed Record ID': record_id, 'Record Kind': kind, 'Record Operation': 'Create New',
+        'Template': template, 'Type': type_name, 'Metadata Readiness': readiness, 'Confidence': confidence,
+        'Reference Role': role, 'Boundary State After Record': 'Closed', 'Production Task Count': '0',
+    }))
+
+
 def calibration_records(boundary='Open', readiness='Review', confidence='Medium', template='Correspondence', note=LETTER_NOTE):
     definitions = [
         ('ref1', 'Metadata Only', 'Metadata Only', '', 'Metadata Reference', '', 'Closed', 'Folder / Context', [1]),
@@ -839,6 +869,137 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(len({row['Digital Asset'] for row in sheets.rows('register', 'Asset QC')}), 22)
         summary = next(row for row in sheets.rows('register', 'Folder Processing Unit Summary') if row.get('Source Group / Folder') == 'F01')
         self.assertEqual(summary['Processing Status'], 'Completed - Validated')
+
+    def test_box31_calibration_is_limited_to_chapters_box_31_f04(self):
+        root = Path(__file__).resolve().parents[1] / 'project_references'
+        f04 = resolve_reference(root, 'Tri Delta Chapters', 'Chapters Box 31', 'F04')
+        box19_f04 = resolve_reference(root, 'Tri Delta Chapters', 'Chapters Box 19', 'F04')
+        box31_f05 = resolve_reference(root, 'Tri Delta Chapters', 'Chapters Box 31', 'F05')
+        other = resolve_reference(root, 'Other Project', 'Chapters Box 31', 'F04')
+        f01 = resolve_reference(root, 'Tri Delta Chapters', 'Chapters Box 19', 'F01')
+        self.assertEqual(f04['reference_id'], 'tri-delta-chapters-box31-f04-calibration')
+        self.assertEqual(f04['version'], '2026-10-20.1')
+        self.assertEqual(f04['box'], 'Chapters Box 31')
+        self.assertEqual(f04['applies_to_folders'], ['F04'])
+        self.assertEqual(f04['material_class'], 'client-approved-calibration-example')
+        self.assertTrue(f04['not_an_executable_rule'])
+        self.assertEqual(f04['examples'][0]['filenames'], [BOX31_SHEET, BOX31_VERSO])
+        self.assertNotIn('groups', f04)
+        self.assertNotIn('examples', box19_f04)
+        self.assertNotIn('examples', box31_f05)
+        self.assertNotIn('examples', other)
+        self.assertEqual(f01['reference_id'], 'tri-delta-chapters-box19-f01-calibration')
+        self.assertEqual(f01['version'], '2026-10-07.1')
+        self.assertNotIn('Box31', json.dumps(f01['examples']))
+        text = decision_instructions()
+        self.assertIn('A descriptive sheet that supports one specific item stays with that item.', text)
+        self.assertNotIn('Box31', text)
+        self.assertNotIn('Photograph_009', text)
+
+    def test_box31_reference_stays_separate_from_photograph_009(self):
+        names = [BOX31_SHEET, BOX31_VERSO, *BOX31_PHOTOS]
+        output = InspectionOutput(
+            assets=[
+                box31_asset(BOX31_SHEET, 'sheet'),
+                box31_asset(BOX31_VERSO, 'sheet'),
+                *[box31_asset(filename, 'photo') for filename in BOX31_PHOTOS],
+            ],
+            records=[
+                box31_record('sheet', 'Metadata Only', 'Metadata Only', readiness='Metadata Reference', role='Descriptive Reference', confidence=''),
+                box31_record('photo', 'Normal Odyssey', 'Photographic Image', 'Photograph'),
+            ],
+        )
+        sheets = MemorySheets()
+        install_job(sheets, [box31_batch(names)])
+        inspector = CapturingInspector(output=output)
+        Orchestrator(sheets, None, inspector, Settings()).run('HIT-1')
+        sent = inspector.calls[0]['context']['approved_project_reference']
+        self.assertEqual(sent['reference_id'], 'tri-delta-chapters-box31-f04-calibration')
+        self.assertTrue(sent['not_an_executable_rule'])
+        self.assertEqual(sent['examples'][0]['filenames'], [BOX31_SHEET, BOX31_VERSO])
+        self.assertEqual(sheets.rows('register', 'Batch Queue')[0]['Batch Status'], 'Committed - Validated')
+        references = sheets.rows('register', 'Metadata References')
+        self.assertEqual(len(references), 1)
+        self.assertIn(BOX31_SHEET, references[0]['Digital Assets'])
+        self.assertIn(BOX31_VERSO, references[0]['Digital Assets'])
+        for filename in BOX31_PHOTOS:
+            self.assertNotIn(filename, references[0]['Digital Assets'])
+        items = sheets.rows('register', 'Itemization')
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]['Template'], 'Photographic Image')
+        self.assertEqual(items[0]['Type'], 'Photograph')
+        for filename in BOX31_PHOTOS:
+            self.assertIn(filename, items[0]['Digital Assets'])
+        self.assertNotIn(BOX31_SHEET, items[0]['Digital Assets'])
+        self.assertNotIn(BOX31_VERSO, items[0]['Digital Assets'])
+        self.assertEqual(sheets.rows('register', 'Production Queue'), [])
+
+    def test_photograph_009_stays_normal_when_the_reference_files_are_absent(self):
+        output = InspectionOutput(
+            assets=[box31_asset(filename, 'photo') for filename in BOX31_PHOTOS],
+            records=[box31_record('photo', 'Normal Odyssey', 'Photographic Image', 'Photograph')],
+        )
+        sheets = MemorySheets()
+        install_job(sheets, [box31_batch(BOX31_PHOTOS)])
+        inspector = CapturingInspector(output=output)
+        Orchestrator(sheets, None, inspector, Settings()).run('HIT-1')
+        sent = inspector.calls[0]['context']['approved_project_reference']
+        self.assertEqual(sent['reference_id'], 'tri-delta-chapters-box31-f04-calibration')
+        self.assertEqual(sheets.rows('register', 'Batch Queue')[0]['Batch Status'], 'Committed - Validated')
+        self.assertEqual(sheets.rows('register', 'Metadata References'), [])
+        items = sheets.rows('register', 'Itemization')
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]['Template'], 'Photographic Image')
+        self.assertEqual(items[0]['Type'], 'Photograph')
+
+    def test_combined_photograph_and_reference_is_blocked_without_rewriting(self):
+        names = [BOX31_SHEET, BOX31_VERSO, *BOX31_PHOTOS]
+        assets = [
+            box31_asset(BOX31_SHEET, 'combined', action='Rotate'),
+            box31_asset(BOX31_VERSO, 'combined'),
+            *[box31_asset(filename, 'combined') for filename in BOX31_PHOTOS],
+        ]
+        record = box31_record('combined', 'Metadata Only', 'Metadata Only', readiness='Metadata Reference', role='Descriptive Reference', confidence='')
+        reference = resolve_reference(
+            Path(__file__).resolve().parents[1] / 'project_references',
+            'Tri Delta Chapters', 'Chapters Box 31', 'F04',
+        )
+        problems = reference_mismatches(assets, [record], reference, names)
+        self.assertEqual(record.record_kind, 'Metadata Only')
+        self.assertEqual(record.template, 'Metadata Only')
+        self.assertTrue(any('Photograph_009a' in problem for problem in problems))
+        self.assertEqual(order_records([record], assets, reference), [record])
+        sheets = MemorySheets()
+        install_job(sheets, [box31_batch(names)])
+        Orchestrator(sheets, None, CapturingInspector(output=InspectionOutput(assets=assets, records=[record])), Settings()).run('HIT-1')
+        row = sheets.rows('register', 'Batch Queue')[0]
+        self.assertEqual(row['Batch Status'], 'Blocked - Human Review')
+        self.assertIn('Calibration conflict', row['Error / Retry Note'])
+        self.assertIn('Staging was not changed', row['Error / Retry Note'])
+        self.assertIn('Photograph_009a', row['Error / Retry Note'])
+        self.assertEqual(sheets.rows('register', 'Asset QC'), [])
+        self.assertEqual(sheets.rows('register', 'Itemization'), [])
+        self.assertEqual(sheets.rows('register', 'Metadata References'), [])
+
+    def test_grouped_photograph_is_not_converted_wholesale_into_metadata_only(self):
+        names = [BOX31_SHEET, BOX31_VERSO, *BOX31_PHOTOS]
+        assets = [
+            box31_asset(BOX31_SHEET, 'combined', action='Rotate'),
+            box31_asset(BOX31_VERSO, 'combined'),
+            *[box31_asset(filename, 'combined') for filename in BOX31_PHOTOS],
+        ]
+        record = box31_record('combined', 'Normal Odyssey', 'Photographic Image', 'Photograph')
+        record.further_detail = 'Descriptive inventory that describes the surrounding photographs and functions as context.'
+        sheets = MemorySheets()
+        install_job(sheets, [box31_batch(names)])
+        Orchestrator(sheets, None, CapturingInspector(output=InspectionOutput(assets=assets, records=[record])), Settings()).run('HIT-1')
+        row = sheets.rows('register', 'Batch Queue')[0]
+        self.assertEqual(row['Batch Status'], 'Blocked - Human Review')
+        self.assertIn('Calibration conflict', row['Error / Retry Note'])
+        self.assertIn('Photograph_009a', row['Error / Retry Note'])
+        self.assertEqual(sheets.rows('register', 'Metadata References'), [])
+        self.assertEqual(sheets.rows('register', 'Itemization'), [])
+        self.assertEqual(sheets.rows('register', 'Asset QC'), [])
 
     def test_completed_folder_summary_rolls_up_by_project_box_and_folder(self):
         def record_row(record_id, template, type_name, readiness='Ready'):
