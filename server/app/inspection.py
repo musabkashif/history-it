@@ -11,7 +11,7 @@ OUTPUT_SCHEMA = """Structured output schema only. This text does not decide reco
 
 Return Lean Split v2 Asset Staging and Record Staging as the structured object. Do not update a spreadsheet, choose a batch, or calculate cumulative totals. All values must be strings. Inspect every authorized image. Preserve every authorized filename exactly once, in manifest order. Each Assigned Record ID must equal a Proposed Record ID in this response. Record Kind is Normal Odyssey or Metadata Only. Record Operation is Create New or Update Existing Open Record. Copy context.prior_open_item from the payload when continuing that record; do not replace a None value and do not create a second record for it. Copy context.folder_code exactly.
 
-When Boundary State After Record starts with Open, or Metadata Readiness is Review, write the visual evidence for that decision in Review Note. Leave Review Note blank only when the record is neither Review nor Open. A folder boundary does not by itself close an item."""
+When Boundary State After Record starts with Open, or Metadata Readiness is Review, write the visual evidence for that decision in Review Note. Leave Review Note blank only when the record is neither Review nor Open. A folder boundary does not by itself close an item. For each asset, set Border Assessment from the supplied image, separate from Action Needed. Use only compliant slight edge, excess capture background, item black, or not applicable. Do not copy it from a production-task note."""
 
 CONNECTION_ATTEMPTS = 4
 

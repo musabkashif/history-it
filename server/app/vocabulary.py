@@ -248,6 +248,208 @@ def _margin_only(note: str) -> bool:
     return any(word in text for word in ('border', 'margin', 'surround', 'background'))
 
 
+_EXCESS_ASSESSMENT = frozenset({'excess capture background', 'excess black capture background'})
+_SLIGHT_ASSESSMENT = frozenset({'compliant slight edge', 'slight archival edge'})
+_NONE_ASSESSMENT = frozenset({'item black', 'not applicable'})
+_CROP_ACTIONS = frozenset({'Archival Border Crop', 'Crop / Recrop', 'Publication Crop', 'Crop'})
+_EXCESS_PHRASES = (
+    'excessive', 'excess', 'large background', 'substantial', 'most of the frame',
+    'capture background', 'black field',
+)
+_UNRESOLVED_CROP = (
+    'Excess capture background is affirmed, and Action Needed does not queue an archival crop. '
+    'No crop task was created from that contradiction. Human review is required before this record can be Ready.'
+)
+_UNRESOLVED_SECOND = (
+    'Rotate is retained. Excess capture background is also affirmed. '
+    'One Action Needed cannot queue both Rotate and an archival crop, so the crop remains unresolved for human review.'
+)
+_UNRESOLVED_TURN = (
+    'The crop action is retained. A rotation finding is also affirmed in the image note. '
+    'One Action Needed cannot queue both, so the rotation remains unresolved for human review.'
+)
+_CONTRADICTION = (
+    'The border assessment and the image note disagree. '
+    'No crop task was created from that contradiction. Human review is required before this record can be Ready.'
+)
+
+
+def _border_assessment(asset) -> str:
+    return collapse(getattr(asset, 'border_assessment', '')).casefold()
+
+
+def _note_denies_excess(note: str) -> bool:
+    """True when an excess phrase appears only as a negation."""
+    text = collapse(note).casefold()
+    if any(_affirmed(text, phrase) for phrase in _EXCESS_PHRASES):
+        return False
+    return any(phrase in text for phrase in _EXCESS_PHRASES)
+
+
+def _slight_note(note: str) -> bool:
+    text = collapse(note).casefold()
+    if _fails_archival_border(text):
+        return False
+    return any(_affirmed(text, phrase) for phrase in (
+        'slight archival edge', 'slight edge', 'compliant slight edge',
+        'compliant archival border', 'thin archival border',
+    ))
+
+
+def _structured_border(asset) -> str:
+    """Map Border Assessment to excess, slight, none, unknown, or empty.
+
+    Empty means an older response did not supply the field. Unknown means the
+    value is present but not one of the allowed findings.
+    """
+    assessment = _border_assessment(asset)
+    if assessment in _EXCESS_ASSESSMENT:
+        return 'excess'
+    if assessment in _SLIGHT_ASSESSMENT:
+        return 'slight'
+    if assessment in _NONE_ASSESSMENT:
+        return 'none'
+    if assessment:
+        return 'unknown'
+    return ''
+
+
+def border_resolution(asset) -> str:
+    """Return excess, slight, none, unresolved, or empty.
+
+    The image finding is Border Assessment and the QC note. A production-task
+    note does not decide the border. An empty result means those findings do
+    not call for a crop or a hold.
+    """
+    structured = _structured_border(asset)
+    note = collapse(asset.qc_note)
+    note_excess = _fails_archival_border(note)
+    if structured == 'unknown':
+        return 'unresolved'
+    if structured == 'excess' and _note_denies_excess(note):
+        return 'unresolved'
+    if structured in {'slight', 'none'} and note_excess:
+        return 'unresolved'
+    if structured == 'excess' or (not structured and note_excess):
+        return 'excess'
+    if structured == 'slight' or (not structured and _slight_note(note)):
+        return 'slight'
+    if structured == 'none':
+        return 'none'
+    return ''
+
+
+def _excess_affirmed(asset) -> bool:
+    return _structured_border(asset) == 'excess' or _fails_archival_border(asset.qc_note)
+
+
+def crop_findings_conflict(asset) -> bool:
+    """True when Action Needed, Border Assessment, and the QC note disagree.
+
+    A production-task note is not a finding. Mentioning the slight-edge
+    standard beside an affirmed excess, as in "beyond the slight archival
+    edge", is not a conflict. Ambiguous margin wording does not cancel an
+    explicit crop by itself.
+    """
+    kind = _structured_border(asset)
+    note = asset.qc_note or ''
+    action = asset.action_needed
+    if kind == 'unknown':
+        return True
+    positive = action in _CROP_ACTIONS or kind == 'excess' or _fails_archival_border(note)
+    negative = kind in {'slight', 'none'} or _note_denies_excess(note) or (
+        _slight_note(note) and not _fails_archival_border(note)
+    )
+    if action in {'No Adjustment', ''}:
+        negative = True
+    if action in _CROP_ACTIONS and kind != 'excess' and not _fails_archival_border(note) and _margin_only(note):
+        return True
+    return bool(positive and negative)
+
+
+def _affirmed_turn(note: str) -> bool:
+    text = collapse(note).casefold()
+    if _orientation_uncertain(text):
+        return False
+    return any(_affirmed(text, phrase) for phrase in ('180-degree', '180 degree', 'upside down'))
+
+
+def _hold_border_review(record, sentence: str) -> None:
+    if record.record_kind == 'Metadata Only':
+        return
+    if record.metadata_readiness in {'', 'Ready', 'Blocked - Cropping/QC'}:
+        record.metadata_readiness = 'Review'
+        record.record_action_needed = 'Review'
+    _note(record, sentence)
+
+
+def _clear_pass(asset) -> None:
+    asset.action_needed = 'Review'
+    asset.qc_status = ''
+    asset.queue_eligible = 'No'
+    asset.task_scope = ''
+
+
+def _preserve_border_reason(asset) -> None:
+    """Copy Border Assessment into the QC note so the register keeps the reason."""
+    assessment = collapse(getattr(asset, 'border_assessment', ''))
+    if not assessment:
+        return
+    sentence = f'Border Assessment: {assessment}.'
+    current = collapse(asset.qc_note)
+    if sentence.casefold() in current.casefold():
+        return
+    asset.qc_note = f'{current} {sentence}'.strip()
+
+
+def _border_review_locked(record) -> bool:
+    note = collapse(record.review_note).casefold()
+    return (
+        'human review is required before this record can be ready' in note
+        or 'crop remains unresolved for human review' in note
+    )
+
+
+def _conflict_sentence(action: str, assessment: str) -> str:
+    shown = assessment or 'missing'
+    return (
+        f'Crop findings conflict. Action Needed was {action or "blank"}. '
+        f'Border Assessment was {shown}. The original QC Note was kept. '
+        'No crop task was created from that contradiction. '
+        'Human review is required before this record can be Ready.'
+    )
+
+
+def _apply_border_hold(record, asset, resolution: str) -> None:
+    """Stop a false Pass. Do not invent a crop, and do not replace Rotate."""
+    if record.record_kind == 'Metadata Only':
+        return
+    conflict = crop_findings_conflict(asset)
+    assessment = collapse(getattr(asset, 'border_assessment', ''))
+    if asset.action_needed == 'Rotate' and (_excess_affirmed(asset) or conflict):
+        _preserve_border_reason(asset)
+        if _excess_affirmed(asset):
+            _hold_border_review(record, f'{_UNRESOLVED_SECOND} Border Assessment was {assessment or "missing"}.')
+        else:
+            _hold_border_review(record, _conflict_sentence('Rotate', assessment))
+        return
+    if conflict or resolution == 'unresolved':
+        action = collapse(asset.action_needed)
+        _preserve_border_reason(asset)
+        _clear_pass(asset)
+        if _excess_affirmed(asset) and action in {'No Adjustment', ''}:
+            _hold_border_review(record, f'{_UNRESOLVED_CROP} Border Assessment was {assessment or "missing"}.')
+        else:
+            _hold_border_review(record, _conflict_sentence(action, assessment))
+        return
+    if resolution == 'excess' and asset.action_needed in _CROP_ACTIONS and _affirmed_turn(asset.qc_note):
+        _preserve_border_reason(asset)
+        _hold_border_review(record, f'{_UNRESOLVED_TURN} Border Assessment was {assessment or "missing"}.')
+        return
+    if resolution == 'excess' and asset.action_needed in _CROP_ACTIONS:
+        _preserve_border_reason(asset)
+
+
 def _is_photographic_print(note: str, record) -> bool:
     text = collapse(note).casefold()
     if 'mounted' in text:
@@ -315,27 +517,21 @@ def apply_authorized_rules(output):
         mounted_on_final = 'mounted photograph' in record_note and 'final' in record_note
         for index, asset in enumerate(owned):
             asset_blob = _blob(asset.asset_role, asset.qc_note, asset.task_note, asset.exception_note)
+            resolution = border_resolution(asset)
+            conflict = crop_findings_conflict(asset)
             mounted = any(phrase in asset_blob for phrase in (
                 'mounted photograph', 'mounted photo', 'photograph mounted', 'tipped-in', 'pasted photograph', 'photo pasted',
             )) or (mounted_on_final and index == len(owned) - 1)
+            preserved_mounted = False
             if mounted and asset.action_needed in {'Crop / Recrop', 'Publication Crop', 'Crop', 'No Adjustment', 'Archival Border Crop', ''}:
+                preserved_mounted = True
                 asset.action_needed = 'Crop / Recrop + Create Derivative Crop'
                 if asset.required_crop_standard in {'', 'Page Edge', 'Publication Page Edge', 'Archival Border'}:
                     asset.required_crop_standard = 'Book Page Edge'
                 if collapse(asset.expected_output_asset_count) in {'', '0', '1'}:
                     asset.expected_output_asset_count = '2'
-            elif not bound_book and _margin_only(asset_blob) and asset.action_needed in {
-                'Archival Border Crop', 'Crop / Recrop', 'Publication Crop', 'Crop',
-            }:
-                asset.action_needed = 'No Adjustment'
-                if record.template == 'Publication':
-                    asset.required_crop_standard = 'Publication Page Edge'
-                elif record.template == 'Photographic Image' or 'photograph' in asset_blob:
-                    asset.required_crop_standard = 'Archival Border'
-                elif not bound_book:
-                    asset.required_crop_standard = 'Tight Border'
-            elif record.template in {'Document', 'Correspondence'} and not bound_book and asset.action_needed == 'Archival Border Crop':
-                if _fails_archival_border(asset_blob):
+            elif not conflict and resolution != 'unresolved' and record.template in {'Document', 'Correspondence'} and not bound_book and asset.action_needed == 'Archival Border Crop':
+                if _fails_archival_border(asset.qc_note) or resolution == 'excess':
                     asset.required_crop_standard = 'Archival Border'
                 else:
                     asset.action_needed = 'Crop / Recrop'
@@ -353,6 +549,11 @@ def apply_authorized_rules(output):
                 asset.action_needed = 'Review'
             elif asset.action_needed == 'Rotate' and _blank_without_orientation(asset_blob):
                 asset.action_needed = 'No Adjustment'
+            if not preserved_mounted:
+                _apply_border_hold(record, asset, resolution)
+        if record.record_kind != 'Metadata Only' and _border_review_locked(record):
+            record.metadata_readiness = 'Review'
+            record.record_action_needed = 'Review'
         if any(asset.action_needed == 'Review' and _orientation_uncertain(_blob(asset.qc_note, asset.task_note)) for asset in owned):
             queued = any(asset.action_needed in QUEUE_ACTIONS for asset in owned)
             if not queued and record.metadata_readiness in {'', 'Ready', 'Blocked - Cropping/QC'}:

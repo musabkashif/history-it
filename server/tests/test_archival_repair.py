@@ -1,11 +1,14 @@
 import json
 import unittest
+from datetime import date
 
 from app.archival import assess_archival, classify_prose
 from app.box_folders import select_authorized_sources
 from app.benchmark import compare_workbooks
 from app.decisions import apply_governing_constraints, decision_instructions
 from app.models import ASSET_HEADERS, RECORD_HEADERS, AssetRow, InspectionOutput, RecordRow, Source
+from app.vocabulary import unresolved_material_review
+from client_reference.commit_engine import plan_commit
 from app.orchestrator import Orchestrator
 from app.register_state import box_status, reconcile_register
 from tests.test_decisions import asset, record
@@ -110,9 +113,11 @@ class AuthorizedRuleTests(unittest.TestCase):
         ))
         output.assets[0].qc_note = 'A black border is visible around the sheet.'
         apply_governing_constraints(output)
-        self.assertEqual(output.assets[0].action_needed, 'No Adjustment')
-        self.assertEqual(output.assets[0].qc_status, 'Pass')
+        self.assertEqual(output.assets[0].action_needed, 'Review')
+        self.assertNotEqual(output.assets[0].qc_status, 'Pass')
         self.assertEqual(output.assets[0].queue_eligible, 'No')
+        self.assertEqual(output.records[0].metadata_readiness, 'Review')
+        self.assertIn('Crop findings conflict', output.records[0].review_note)
 
     def test_a_large_book_background_still_crops(self):
         output = apply_governing_constraints(InspectionOutput(
@@ -211,9 +216,16 @@ class QcCorrectionTests(unittest.TestCase):
         self.assertIn('not Research Notes', text)
         self.assertIn('excess black capture background', text)
         self.assertIn('slight archival edge', text)
+        self.assertIn('physical item boundary', text)
+        self.assertIn('compliant slight archival border', text)
+        self.assertIn('Border Assessment', text)
+        self.assertIn('Do not decide that failure by counting pixels', text)
+        self.assertIn('Do not choose Pass from the wording of a production-task note', text)
+        self.assertIn('Do not call a large black capture field a slight archival edge', text)
         self.assertIn('180-degree', text)
         self.assertNotIn('F04_004', text)
         self.assertNotIn('Photograph_016b', text)
+        self.assertNotIn('75', text)
 
     def test_context_inventory_and_blank_verso_are_one_metadata_reference(self):
         output = apply_governing_constraints(InspectionOutput(
@@ -286,12 +298,13 @@ class QcCorrectionTests(unittest.TestCase):
             assets=[print_asset],
             records=[record('photo', template='Photographic Image', type_name='Photograph', readiness='Ready')],
         ))
-        self.assertEqual(output.assets[0].action_needed, 'No Adjustment')
-        self.assertEqual(output.assets[0].required_crop_standard, 'Archival Border')
-        self.assertEqual(output.assets[0].qc_status, 'Pass')
+        self.assertEqual(output.assets[0].action_needed, 'Review')
+        self.assertNotEqual(output.assets[0].qc_status, 'Pass')
         self.assertEqual(output.assets[0].queue_eligible, 'No')
-        self.assertEqual(output.records[0].metadata_readiness, 'Ready')
+        self.assertEqual(output.records[0].metadata_readiness, 'Review')
         self.assertEqual(output.records[0].production_task_count, '0')
+        self.assertIn('Crop findings conflict', output.records[0].review_note)
+        self.assertIn('slight archival edge', output.assets[0].qc_note)
 
     def test_naming_the_standard_alone_does_not_create_a_crop_task(self):
         output = apply_governing_constraints(InspectionOutput(
@@ -469,9 +482,11 @@ class QcCorrectionTests(unittest.TestCase):
                 record('unsure', template='Photographic Image', type_name='Photograph', readiness='Ready'),
             ],
         ))
-        self.assertEqual(output.assets[0].action_needed, 'No Adjustment')
+        self.assertEqual(output.assets[0].action_needed, 'Review')
+        self.assertNotEqual(output.assets[0].qc_status, 'Pass')
         self.assertEqual(output.assets[0].queue_eligible, 'No')
-        self.assertEqual(output.records[0].metadata_readiness, 'Ready')
+        self.assertEqual(output.records[0].metadata_readiness, 'Review')
+        self.assertIn('Crop findings conflict', output.records[0].review_note)
         self.assertEqual(output.assets[1].action_needed, 'Archival Border Crop')
         self.assertEqual(output.records[1].metadata_readiness, 'Blocked - Cropping/QC')
         self.assertEqual(output.records[2].record_kind, 'Normal Odyssey')
@@ -524,10 +539,12 @@ class QcCorrectionTests(unittest.TestCase):
                 record('mixed-turn', template='Photographic Image', type_name='Photograph', readiness='Ready'),
             ],
         ))
-        self.assertEqual(output.assets[0].action_needed, 'No Adjustment')
-        self.assertEqual(output.records[0].metadata_readiness, 'Ready')
-        self.assertEqual(output.assets[1].action_needed, 'No Adjustment')
-        self.assertEqual(output.records[1].metadata_readiness, 'Ready')
+        self.assertEqual(output.assets[0].action_needed, 'Review')
+        self.assertEqual(output.records[0].metadata_readiness, 'Review')
+        self.assertNotEqual(output.assets[0].qc_status, 'Pass')
+        self.assertEqual(output.assets[1].action_needed, 'Review')
+        self.assertEqual(output.records[1].metadata_readiness, 'Review')
+        self.assertNotEqual(output.assets[1].qc_status, 'Pass')
         self.assertEqual(output.assets[2].action_needed, 'Archival Border Crop')
         self.assertEqual(output.records[2].metadata_readiness, 'Blocked - Cropping/QC')
         self.assertEqual(output.assets[3].action_needed, 'Archival Border Crop')
@@ -541,6 +558,258 @@ class QcCorrectionTests(unittest.TestCase):
         self.assertEqual(output.assets[5].action_needed, 'No Adjustment')
         self.assertEqual(output.assets[6].action_needed, 'Rotate')
         self.assertEqual(output.records[8].metadata_readiness, 'Blocked - Cropping/QC')
+
+    def test_slight_compliant_edge_passes(self):
+        print_asset = asset('print.jpg', 'photo', action='No Adjustment')
+        print_asset.qc_note = 'A compliant slight archival border remains around the physical item.'
+        print_asset.border_assessment = 'compliant slight edge'
+        print_asset.required_crop_standard = 'Archival Border'
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[print_asset],
+            records=[record('photo', template='Photographic Image', type_name='Photograph', readiness='Ready')],
+        ))
+        self.assertEqual(output.assets[0].action_needed, 'No Adjustment')
+        self.assertEqual(output.assets[0].qc_status, 'Pass')
+        self.assertEqual(output.assets[0].queue_eligible, 'No')
+        self.assertEqual(output.records[0].metadata_readiness, 'Ready')
+        self.assertEqual(output.records[0].production_task_count, '0')
+
+    def test_required_crop_standard_alone_does_not_create_a_crop(self):
+        print_asset = asset('print.jpg', 'photo', action='No Adjustment')
+        print_asset.required_crop_standard = 'Archival Border'
+        print_asset.border_assessment = 'not applicable'
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[print_asset],
+            records=[record('photo', template='Photographic Image', type_name='Photograph', readiness='Ready')],
+        ))
+        self.assertEqual(output.assets[0].action_needed, 'No Adjustment')
+        self.assertEqual(output.assets[0].qc_status, 'Pass')
+        self.assertEqual(output.assets[0].queue_eligible, 'No')
+        self.assertEqual(output.records[0].metadata_readiness, 'Ready')
+        self.assertEqual(output.records[0].production_task_count, '0')
+
+    def test_affirmed_excess_with_no_adjustment_is_not_ready(self):
+        print_asset = asset('print.jpg', 'photo', action='No Adjustment')
+        print_asset.qc_note = 'Excess black capture background surrounds the print.'
+        print_asset.border_assessment = 'excess capture background'
+        print_asset.required_crop_standard = 'Archival Border'
+        print_asset.task_note = 'No Adjustment'
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[print_asset],
+            records=[record('photo', template='Photographic Image', type_name='Photograph', readiness='Ready')],
+        ))
+        self.assertEqual(output.assets[0].action_needed, 'Review')
+        self.assertNotEqual(output.assets[0].action_needed, 'Archival Border Crop')
+        self.assertNotEqual(output.assets[0].qc_status, 'Pass')
+        self.assertEqual(output.assets[0].queue_eligible, 'No')
+        self.assertEqual(output.records[0].metadata_readiness, 'Review')
+        self.assertEqual(output.records[0].production_task_count, '0')
+        self.assertIn('excess', output.assets[0].qc_note.casefold())
+        self.assertIn('Human review is required', output.records[0].review_note)
+        self.assertNotIn('held for review', output.records[0].review_note.casefold())
+        self.assertFalse(unresolved_material_review(output.records[0]))
+
+    def test_negated_excess_is_not_an_automatic_crop(self):
+        print_asset = asset('print.jpg', 'photo', action='No Adjustment')
+        print_asset.qc_note = 'No excess background. A slight archival edge remains.'
+        print_asset.required_crop_standard = 'Archival Border'
+        print_asset.task_note = 'Excess black capture background. Crop the frame.'
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[print_asset],
+            records=[record('photo', template='Photographic Image', type_name='Photograph', readiness='Ready')],
+        ))
+        self.assertEqual(output.assets[0].action_needed, 'No Adjustment')
+        self.assertEqual(output.assets[0].qc_status, 'Pass')
+        self.assertEqual(output.assets[0].queue_eligible, 'No')
+        self.assertEqual(output.records[0].metadata_readiness, 'Ready')
+
+    def test_explicit_crop_and_substantial_excess_is_retained(self):
+        print_asset = asset('print.jpg', 'photo', action='Archival Border Crop', eligible='Yes')
+        print_asset.qc_note = 'Substantial excess black capture background surrounds the print.'
+        print_asset.border_assessment = 'excess capture background'
+        print_asset.required_crop_standard = 'Archival Border'
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[print_asset],
+            records=[record('photo', template='Photographic Image', type_name='Photograph', readiness='Ready')],
+        ))
+        self.assertEqual(output.assets[0].action_needed, 'Archival Border Crop')
+        self.assertEqual(output.assets[0].qc_status, 'Action Required')
+        self.assertEqual(output.assets[0].queue_eligible, 'Yes')
+        self.assertEqual(output.records[0].metadata_readiness, 'Blocked - Cropping/QC')
+        self.assertEqual(output.records[0].production_task_count, '1')
+
+    def test_crop_action_and_slight_assessment_is_review_not_pass(self):
+        print_asset = asset('print.jpg', 'photo', action='Archival Border Crop', eligible='Yes')
+        print_asset.border_assessment = 'compliant slight edge'
+        print_asset.qc_note = 'The physical item fills the frame.'
+        print_asset.task_note = 'Excess black capture background. Archival Border Crop.'
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[print_asset],
+            records=[record('photo', template='Photographic Image', type_name='Photograph', readiness='Ready')],
+        ))
+        self.assertEqual(output.assets[0].action_needed, 'Review')
+        self.assertNotEqual(output.assets[0].qc_status, 'Pass')
+        self.assertEqual(output.assets[0].queue_eligible, 'No')
+        self.assertEqual(output.records[0].metadata_readiness, 'Review')
+        self.assertEqual(output.records[0].production_task_count, '0')
+        self.assertIn('compliant slight edge', output.records[0].review_note)
+        self.assertIn('Archival Border Crop', output.records[0].review_note)
+        self.assertIn('Border Assessment: compliant slight edge.', output.assets[0].qc_note)
+        self.assertNotIn('Border Assessment', output.assets[0].model_dump(by_alias=True))
+
+    def test_explicit_crop_is_not_downgraded_when_excess_is_also_affirmed(self):
+        print_asset = asset('print.jpg', 'photo', action='Archival Border Crop', eligible='Yes')
+        print_asset.border_assessment = '  Excess Capture Background  '
+        print_asset.qc_note = 'A slight archival edge surrounds the print.'
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[print_asset],
+            records=[record('photo', template='Photographic Image', type_name='Photograph', readiness='Ready')],
+        ))
+        self.assertEqual(output.assets[0].action_needed, 'Review')
+        self.assertNotEqual(output.assets[0].qc_status, 'Pass')
+        self.assertEqual(output.assets[0].queue_eligible, 'No')
+        self.assertEqual(output.records[0].metadata_readiness, 'Review')
+        self.assertIn('excess capture background', output.records[0].review_note.casefold())
+        self.assertIn('slight archival edge', output.assets[0].qc_note)
+        apply_governing_constraints(output)
+        self.assertEqual(output.records[0].metadata_readiness, 'Review')
+        self.assertNotEqual(output.assets[0].qc_status, 'Pass')
+
+    def test_crop_beyond_a_slight_edge_with_affirmed_excess_is_kept(self):
+        print_asset = asset('print.jpg', 'photo', action='Archival Border Crop', eligible='Yes')
+        print_asset.border_assessment = 'excess capture background'
+        print_asset.qc_note = 'Excess black capture background remains beyond the slight archival edge.'
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[print_asset],
+            records=[record('photo', template='Photographic Image', type_name='Photograph', readiness='Ready')],
+        ))
+        self.assertEqual(output.assets[0].action_needed, 'Archival Border Crop')
+        self.assertEqual(output.assets[0].qc_status, 'Action Required')
+        self.assertEqual(output.assets[0].queue_eligible, 'Yes')
+        self.assertEqual(output.records[0].metadata_readiness, 'Blocked - Cropping/QC')
+        self.assertNotEqual(output.records[0].metadata_readiness, 'Ready')
+
+    def test_missing_or_invalid_border_assessment_is_safe(self):
+        from tests.test_workflow import filled
+        older = AssetRow.model_validate(filled(ASSET_HEADERS, **{
+            'Digital Asset': 'older.jpg',
+            'Assigned Record ID': 'photo',
+            'Action Needed': 'No Adjustment',
+            'QC Status': 'Pass',
+            'QC Note': 'A slight archival edge surrounds the print.',
+            'Required Crop Standard': 'Archival Border',
+            'Inspection Complete': 'Yes',
+        }))
+        self.assertEqual(older.border_assessment, '')
+        parsed = AssetRow.model_validate(filled(ASSET_HEADERS, **{
+            'Digital Asset': 'parsed.jpg',
+            'Assigned Record ID': 'photo',
+            'Action Needed': 'No Adjustment',
+            'QC Note': 'The photograph is upright.',
+            'Border Assessment': '  Excess Capture Background  ',
+            'Inspection Complete': 'Yes',
+        }))
+        self.assertEqual(parsed.border_assessment, '  Excess Capture Background  ')
+        invalid = asset('print.jpg', 'photo', action='No Adjustment')
+        invalid.border_assessment = 'wide margin'
+        invalid.qc_note = 'The photograph is upright.'
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[older, parsed, invalid],
+            records=[
+                record('photo', template='Photographic Image', type_name='Photograph', readiness='Ready'),
+            ],
+        ))
+        self.assertEqual(output.assets[0].action_needed, 'No Adjustment')
+        self.assertEqual(output.assets[0].qc_status, 'Pass')
+        self.assertEqual(output.records[0].metadata_readiness, 'Review')
+        self.assertEqual(output.assets[1].action_needed, 'Review')
+        self.assertIn('excess capture background', output.records[0].review_note.casefold())
+        self.assertEqual(output.assets[2].action_needed, 'Review')
+        self.assertIn('wide margin', output.records[0].review_note)
+        self.assertNotIn('Border Assessment', output.assets[1].model_dump(by_alias=True))
+        schema = json.dumps(AssetRow.model_json_schema())
+        self.assertIn('Border Assessment', schema)
+
+    def test_rotate_and_excess_background_keeps_rotation_and_blocks_review(self):
+        turned = asset('print.jpg', 'TDC-B31-F04-016', action='Rotate', eligible='Yes')
+        turned.qc_note = 'The print is 180 degrees from upright. Excess black capture background surrounds it.'
+        turned.border_assessment = 'excess capture background'
+        turned.task_note = 'Rotate 180 degrees, then finish the crop.'
+        turned.required_crop_standard = 'Archival Border'
+        turned.commit_status = 'Pending Commit'
+        row = record(
+            'TDC-B31-F04-016',
+            template='Photographic Image',
+            type_name='Photograph',
+            readiness='Ready',
+        )
+        row.commit_status = 'Pending Commit'
+        row.full_record_assets = 'print.jpg'
+        row.digital_asset_count = '1'
+        row.logical_component_count = '1'
+        output = apply_governing_constraints(InspectionOutput(assets=[turned], records=[row]))
+        self.assertEqual(output.assets[0].action_needed, 'Rotate')
+        self.assertNotEqual(output.assets[0].action_needed, 'Archival Border Crop')
+        self.assertEqual(output.assets[0].qc_status, 'Action Required')
+        self.assertEqual(output.assets[0].queue_eligible, 'Yes')
+        self.assertIn('180', output.assets[0].qc_note)
+        self.assertIn('excess', output.assets[0].qc_note.casefold())
+        self.assertEqual(output.records[0].metadata_readiness, 'Review')
+        self.assertIn('Rotate is retained', output.records[0].review_note)
+        self.assertIn('crop remains unresolved', output.records[0].review_note)
+        self.assertEqual(output.records[0].production_task_count, '1')
+        self.assertFalse(unresolved_material_review(output.records[0]))
+        staged_asset = output.assets[0].model_dump(by_alias=True)
+        staged_record = output.records[0].model_dump(by_alias=True)
+        self.assertNotIn('Border Assessment', staged_asset)
+        self.assertEqual(set(staged_asset), set(ASSET_HEADERS))
+        queue = {
+            'Batch ID': 'HIT-1-B0001',
+            'Batch Status': 'Inspection Complete - Awaiting Commit',
+            'Planned Asset Count': '1',
+        }
+        plan = plan_commit(
+            queue,
+            [staged_asset],
+            [staged_record],
+            {'Asset QC': [], 'Itemization': [], 'Metadata References': [], 'Ready for Metadata': [], 'Production Queue': []},
+            date.today().strftime('%m/%d/%y'),
+        )
+        tasks = plan.append_rows['Production Queue']
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]['Action Needed'], 'Rotate')
+        self.assertEqual(tasks[0]['Digital Asset'], 'print.jpg')
+        self.assertEqual(plan.append_rows['Itemization'][0]['Metadata Readiness'], 'Review')
+        self.assertNotIn('Ready for Metadata', plan.append_rows)
+        self.assertIn('Border Assessment', json.dumps(AssetRow.model_json_schema()))
+
+    def test_a_task_note_alone_does_not_create_a_crop_or_a_review_hold(self):
+        print_asset = asset('print.jpg', 'photo', action='No Adjustment')
+        print_asset.qc_note = 'The photograph is upright.'
+        print_asset.task_note = 'Excess black capture background. Archival Border Crop.'
+        print_asset.required_crop_standard = 'Archival Border'
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[print_asset],
+            records=[record('photo', template='Photographic Image', type_name='Photograph', readiness='Ready')],
+        ))
+        self.assertEqual(output.assets[0].action_needed, 'No Adjustment')
+        self.assertEqual(output.assets[0].qc_status, 'Pass')
+        self.assertEqual(output.records[0].metadata_readiness, 'Ready')
+        self.assertEqual(output.records[0].production_task_count, '0')
+
+    def test_metadata_only_excess_wording_does_not_create_a_crop(self):
+        sheet = asset('sheet.jpg', 'reference', action='No Adjustment')
+        sheet.qc_note = 'Excess black capture background surrounds the sheet.'
+        sheet.border_assessment = 'excess capture background'
+        output = apply_governing_constraints(InspectionOutput(
+            assets=[sheet],
+            records=[record('reference', kind='Metadata Only', template='Metadata Only', type_name='', readiness='Metadata Reference')],
+        ))
+        self.assertEqual(output.records[0].record_kind, 'Metadata Only')
+        self.assertEqual(output.assets[0].action_needed, 'N/A')
+        self.assertEqual(output.assets[0].queue_eligible, 'No')
+        self.assertEqual(output.records[0].production_task_count, '0')
+        self.assertEqual(output.records[0].metadata_readiness, 'Metadata Reference')
 
 
 class ParentDiscoveryTests(unittest.TestCase):

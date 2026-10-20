@@ -30,6 +30,8 @@ class AssetRow(StrictRow):
     queue_eligible: str = Field(alias='Production Queue Eligible')
     task_scope: str = Field(alias='Production Task Scope')
     task_note: str = Field(alias='Production Task Note')
+    # Visual finding only. Excluded from staging dumps so it is not a register column.
+    border_assessment: str = Field(default='', alias='Border Assessment', exclude=True)
     exception_note: str = Field(alias='Exception / Duplicate Note')
     inspection_complete: str = Field(alias='Inspection Complete')
     commit_status: str = Field(alias='Commit Status')
