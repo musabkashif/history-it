@@ -19,14 +19,14 @@ export function SettingsPage({ onOpenJob, currentJobId }: { onOpenJob: (id: stri
 
   return (
     <>
-      <SectionHeader eyebrow="Workspace" title="Settings & guide" description="Reopen a job by ID and review operator access rules. A database workspace browser is not available yet." />
+      <SectionHeader eyebrow="Settings" title="Settings & guide" description="Open a Sheets job by ID, or browse Projects to see each project's jobs. Google Sheets remains the authoritative register." />
       <div className="grid gap-6 xl:grid-cols-[.9fr_1.1fr]">
         <div className="surface p-6 sm:p-8">
           <div className="flex items-center gap-3">
             <Database className="h-5 w-5 text-cyan" />
             <div>
               <div className="text-sm font-semibold text-white">Existing job</div>
-              <div className="text-xs text-slate-400">Paste the Job ID for this console. There is no browseable project list yet.</div>
+              <div className="text-xs text-slate-400">Paste the Job ID to open it in the current Sheets workflow. Projects lists each project and the jobs recorded for it.</div>
             </div>
           </div>
           {error && <div className="mt-5"><Alert kind="danger" title="Could not open job">{error}</Alert></div>}

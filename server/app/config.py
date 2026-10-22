@@ -48,6 +48,15 @@ class Settings(BaseSettings):
     # normal operator UI and APIs must not present it as generic verification.
     enable_developer_verification: bool = False
 
+    # MongoDB control plane. All flags stay off until an operator turns them on.
+    # Sheets remains authoritative either way. The URI is never logged.
+    mongodb_uri: str = ''
+    mongodb_database: str = ''
+    control_plane_environment: str = 'staging'
+    database_control_plane_enabled: bool = False
+    database_shadow_writes_enabled: bool = False
+    database_backfill_enabled: bool = False
+
     def validate_live(self):
         from pathlib import Path
         missing = [k for k in ('openai_api_key','openai_model','google_application_credentials') if not getattr(self,k)]

@@ -7,6 +7,12 @@ export interface Health {
   diagnostics_build?: string
   login_configured?: boolean
   developer_verification?: boolean
+  database_configured?: boolean
+  database_available?: boolean | null
+  database_control_plane_enabled?: boolean
+  database_shadow_writes_enabled?: boolean
+  database_backfill_enabled?: boolean
+  database_message?: string
 }
 export interface JobState {
   job_id: string; project: string; spreadsheet_id: string; source_folder_id: string
@@ -29,6 +35,169 @@ export interface ValidationResponse { job_id: string; validation: Record<string,
 export interface CheckpointResponse { outcome: string; matches: boolean; final_box19_match?: boolean; counts?: { actual?: Record<string, number>; expected?: Record<string, number>; differences?: Record<string, unknown> }; checks?: Record<string, boolean>; [key: string]: unknown }
 export interface CompareResponse { outcome: string; matches: boolean; strict_outcome?: string; archival_outcome?: string; archival_matches?: boolean; archival_policy?: string; archival_differences?: Record<string, unknown>[]; archival_match?: Record<string, { matched: number; total: number; percent: number }>; final_box19_match?: boolean; internally_consistent?: boolean; controlled_mismatch?: boolean; free_text_mismatch?: boolean; counts?: { live?: Record<string, number>; benchmark?: Record<string, number>; differences?: Record<string, unknown> }; difference_classes?: Record<string, unknown>[]; sheets?: Record<string, { live_count?: number; benchmark_count?: number; matches?: boolean; missing?: string[]; unexpected?: string[]; value_mismatches?: { key: string; fields?: Record<string, unknown>; field_classes?: Record<string, string> }[] }>; f01_letter_transition?: string; [key: string]: unknown }
 export interface JobForm { project: string; source_folder_id: string; spreadsheet_id: string; batch_size: number; box: string }
+
+export interface ControlWorkspace {
+  workspace_id: string
+  project_name?: string | null
+  client_organization?: string | null
+  source_root_url?: string | null
+  source_root_id?: string | null
+  default_register_url?: string | null
+  register_id?: string | null
+  environment?: string | null
+  status?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+export interface ControlSummaryCounts {
+  asset_count?: number | null
+  batch_count?: number | null
+  folder_count?: number | null
+  completed_batch_count?: number | null
+  failed_batch_count?: number | null
+  last_batch_asset_count?: number | null
+}
+export interface ControlJob {
+  job_id: string
+  workspace_id: string
+  project_name?: string | null
+  box_label?: string | null
+  parent_folder_url?: string | null
+  parent_folder_id?: string | null
+  register_url?: string | null
+  register_id?: string | null
+  register_file_reference?: string | null
+  batch_size?: number | null
+  job_status?: string | null
+  sheets_status?: string | null
+  source?: string | null
+  summary_origin?: string | null
+  created_at?: string | null
+  started_at?: string | null
+  completed_at?: string | null
+  updated_at?: string | null
+  deployed_release?: string | null
+  summary_counts?: ControlSummaryCounts | null
+  last_error?: string | null
+  completion_evidence?: string | null
+  reopen_allowed?: boolean
+  sheets_reopen_allowed?: boolean
+  resume_allowed?: boolean
+  pause_allowed?: boolean
+  retry_allowed?: boolean
+  start_allowed?: boolean
+}
+export interface ControlListResponse<T> {
+  state: string
+  enabled: boolean
+  available: boolean
+  warning?: string | null
+  inspection_started?: boolean
+  workspaces?: T[]
+  jobs?: T[]
+}
+export interface ControlFolder {
+  folder_id: string
+  folder_url?: string | null
+  folder_name?: string | null
+  folder_identifier_source?: string | null
+  box_label?: string | null
+  discovery_order?: number | null
+  authorization_status?: string | null
+  processing_status?: string | null
+  asset_count?: number | null
+  completed_at?: string | null
+}
+export interface ControlBatch {
+  batch_id: string
+  folder_id?: string | null
+  batch_number?: number | null
+  asset_count?: number | null
+  start_filename?: string | null
+  end_filename?: string | null
+  status?: string | null
+  attempt_count?: number | null
+  validation_status?: string | null
+  commit_status?: string | null
+  prior_open_item?: string | null
+  resulting_open_item?: string | null
+  error_information?: string | null
+  response_ids?: string[]
+  lease_owner?: string | null
+}
+export interface ControlEvent {
+  event_id: string
+  event_type?: string | null
+  previous_status?: string | null
+  new_status?: string | null
+  message?: string | null
+  release?: string | null
+  actor?: string | null
+  timestamp?: string | null
+  folder_id?: string | null
+  batch_id?: string | null
+}
+export interface ControlCheckpoint {
+  checkpoint_id: string
+  current_state?: string | null
+  last_successful_step?: string | null
+  pause_state?: Record<string, unknown> | null
+  resume_state?: Record<string, unknown> | null
+  checkpoint_version?: number | null
+  created_at?: string | null
+  folder_id?: string | null
+  batch_id?: string | null
+}
+export interface ControlSnapshot {
+  snapshot_id: string
+  register_url?: string | null
+  register_id?: string | null
+  source_folder?: string | null
+  counts?: Record<string, unknown>
+  validation_result?: string | null
+  validation_results?: { check_id?: string | null; scope?: string | null; result?: string | null }[]
+  continuation?: Record<string, string | null>
+  box_status?: string | null
+  readback_checksum?: string | null
+  response_ids?: string[]
+  captured_at?: string | null
+}
+export interface ControlJobDetail {
+  state: string
+  enabled: boolean
+  available: boolean
+  warning?: string | null
+  inspection_started?: boolean
+  already_applied?: boolean
+  warnings?: string[]
+  job: ControlJob
+  workspace?: ControlWorkspace | null
+  folders: ControlFolder[]
+  batches: ControlBatch[]
+  checkpoints: ControlCheckpoint[]
+  events: ControlEvent[]
+  snapshots: ControlSnapshot[]
+  validation_results: { check_id?: string | null; scope?: string | null; result?: string | null }[]
+  errors: { source?: string; batch_id?: string; message?: string | null; timestamp?: string | null }[]
+  retries: ControlEvent[]
+  register?: { register_url?: string | null; register_id?: string | null; register_file_reference?: string | null }
+}
+export interface ControlJobFilters {
+  workspace_id?: string
+  project?: string
+  box?: string
+  status?: string
+  source?: string
+  created_from?: string
+  created_to?: string
+}
+export interface ControlImportRequest {
+  job_id: string
+  register_url?: string
+  register_file_reference?: string
+  source: 'historical' | 'imported'
+  deployed_release?: string
+}
 
 /**
  * True only when the backend worker thread is admitted/alive, or the API already

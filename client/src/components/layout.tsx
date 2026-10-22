@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react'
 import { useState } from 'react'
-import { Activity, ChevronRight, CircleHelp, FileCheck2, LayoutDashboard, LogOut, Menu, PlayCircle, Settings, Sparkles, X } from 'lucide-react'
-import { Badge, Button } from './ui'
+import { Activity, ChevronRight, FileCheck2, Folders, LayoutDashboard, LogOut, Menu, PlayCircle, Settings, X } from 'lucide-react'
+import { Alert, Badge, Button } from './ui'
 
-export type View = 'overview'|'new-job'|'job'|'benchmark'|'settings'
+export type View = 'overview'|'new-job'|'job'|'benchmark'|'settings'|'projects'|'jobs'|'control-job'
 
 function OdysseyMark({ compact = false }: { compact?: boolean }) {
   // Primary mark matching the logo usage guide (broken ring around O + wordmark).
@@ -29,6 +29,8 @@ export function AppShell({
   loadingJob,
   onLogout,
   logoutLoading,
+  databaseWarning,
+  inProject = false,
   children,
 }: {
   view: View
@@ -39,16 +41,18 @@ export function AppShell({
   loadingJob?: boolean
   onLogout?: () => void
   logoutLoading?: boolean
+  databaseWarning?: string | null
+  inProject?: boolean
   children: ReactNode
 }) {
   const [mobileOpen, setMobileOpen] = useState(false)
   const developerVerification = Boolean(health?.developer_verification)
   const workspaceLabel = loadingJob
-    ? 'Loading workspace…'
+    ? 'Loading job…'
     : (projectName && projectName.trim()) || 'Odyssey console'
   const nav = [
     { id: 'overview' as const, label: 'Overview', icon: LayoutDashboard },
-    { id: 'new-job' as const, label: 'New workspace', icon: Sparkles },
+    { id: 'projects' as const, label: 'Projects', icon: Folders },
     { id: 'job' as const, label: 'Current job', icon: PlayCircle },
     ...(developerVerification
       ? [{ id: 'benchmark' as const, label: 'Developer: Box 19 verify', icon: FileCheck2 }]
@@ -61,16 +65,16 @@ export function AppShell({
         <div className="absolute -left-24 -top-24 h-96 w-96 rounded-full bg-cyan/10 blur-3xl" />
         <div className="absolute right-0 top-1/3 h-96 w-96 rounded-full bg-lime/5 blur-3xl" />
       </div>
-      <aside className={`fixed inset-y-0 left-0 z-30 w-64 border-r border-line/50 bg-panel/95 px-4 py-5 backdrop-blur-xl transition-transform lg:translate-x-0 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+      <aside className={`fixed inset-y-0 left-0 z-30 flex w-64 flex-col border-r border-line/50 bg-panel/95 px-4 py-5 backdrop-blur-xl transition-transform lg:translate-x-0 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex items-center justify-between gap-2 overflow-visible px-1 pt-1">
           <OdysseyMark />
           <button className="text-slate-300 lg:hidden" onClick={() => setMobileOpen(false)} aria-label="Close menu"><X className="h-5 w-5" /></button>
         </div>
-        <div className="mt-8 px-2 eyebrow">Workspace</div>
+        <div className="mt-8 px-2 eyebrow">Console</div>
         <nav className="mt-3 space-y-1">
           {nav.map(item => {
             const Icon = item.icon
-            const active = view === item.id
+            const active = view === item.id || (item.id === 'projects' && (inProject || view === 'jobs' || view === 'control-job'))
             return (
               <button
                 key={item.id}
@@ -84,23 +88,19 @@ export function AppShell({
             )
           })}
         </nav>
-        <div className="mt-10 px-2 eyebrow">System</div>
-        <div className="mt-3 rounded-xl border border-line/50 bg-white/[.03] p-3">
+        <div className="mt-auto rounded-xl border border-line/50 bg-white/[.03] p-3">
           <div className="flex items-center gap-2 text-xs font-medium text-slate-200"><Activity className="h-3.5 w-3.5 text-cyan" /> Connection</div>
           <div className="mt-2 flex items-center justify-between">
             <span className="text-xs text-slate-300">{health?.status === 'ok' ? 'Connected' : health?.status === 'offline' ? 'Offline' : 'Checking'}</span>
             <Badge tone={health?.status === 'ok' ? 'success' : health?.status === 'offline' ? 'danger' : 'neutral'}>{health?.status === 'ok' ? 'On' : health?.status === 'offline' ? 'Off' : '…'}</Badge>
           </div>
           {username && <div className="mt-3 truncate text-[11px] text-slate-300">Signed in as <span className="text-white">{username}</span></div>}
-        </div>
-        {onLogout && (
-          <div className="mt-3 px-0">
-            <Button tone="ghost" loading={logoutLoading} className="w-full justify-start px-3" onClick={onLogout}>
+          {onLogout && (
+            <Button tone="ghost" loading={logoutLoading} className="mt-2 w-full justify-start px-2" onClick={onLogout}>
               <LogOut className="h-4 w-4" /> Logout
             </Button>
-          </div>
-        )}
-        <div className="absolute bottom-5 left-6 right-6 flex items-center gap-2 text-xs text-slate-400"><CircleHelp className="h-3.5 w-3.5" /> <span>Operator console</span></div>
+          )}
+        </div>
       </aside>
       <main className="relative z-10 min-h-screen lg:pl-64">
         <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-line/50 bg-canvas/80 px-4 backdrop-blur-xl sm:px-8">
@@ -125,7 +125,14 @@ export function AppShell({
             <button onClick={() => setView('settings')} className="rounded-lg p-2 text-slate-400 hover:bg-white/5 hover:text-slate-100" aria-label="Settings"><Settings className="h-4 w-4" /></button>
           </div>
         </header>
-        <div className="mx-auto max-w-[1480px] px-4 py-7 sm:px-8">{children}</div>
+        <div className="mx-auto max-w-[1480px] px-4 py-7 sm:px-8">
+          {databaseWarning && (
+            <div className="mb-5">
+              <Alert kind="warning" title="Control database">{databaseWarning}</Alert>
+            </div>
+          )}
+          {children}
+        </div>
       </main>
     </div>
   )

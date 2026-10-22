@@ -10,7 +10,7 @@ export function Overview({
   job: JobState | null
   batches: Batch[]
   usage: UsageResponse | null
-  onNavigate: (v: 'new-job'|'job'|'benchmark'|'settings') => void
+  onNavigate: (v: 'new-job'|'job'|'benchmark'|'settings'|'projects') => void
   onRefresh: () => void
   loading?: boolean
   lastRefreshAt?: string | null
@@ -31,12 +31,12 @@ export function Overview({
     <>
       <SectionHeader
         eyebrow="Odyssey / control room"
-        title={job?.project || 'Archive workspace'}
+        title={job?.project || 'Archive console'}
         description="Run, monitor, and validate the archive itemization pipeline from one operator console."
         actions={<Button tone="ghost" onClick={onRefresh} loading={loading}><RefreshCw className="h-4 w-4" /> Refresh</Button>}
       />
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Workspace status" value={job ? <StatusBadge status={statusLabel} /> : 'Not connected'} hint={job ? job.job_id : 'Create or open a job'} icon={<ShieldCheck className="h-5 w-5" />} tone="cyan" />
+        <StatCard label="Job status" value={job ? <StatusBadge status={statusLabel} /> : 'Not connected'} hint={job ? job.job_id : 'Create or open a job'} icon={<ShieldCheck className="h-5 w-5" />} tone="cyan" />
         <StatCard label="Batches committed" value={`${committed}/${batches.length || 0}`} hint={failed ? `${failed} needs attention` : 'Validated readback'} icon={<CheckCircle2 className="h-5 w-5" />} tone="violet" />
         <StatCard label="Manifest assets" value={totalAssets || '—'} hint="Authorized source images" icon={<Image className="h-5 w-5" />} tone="amber" />
         <StatCard label="Recorded usage" value={cost ? `$${cost.toFixed(2)}` : '—'} hint="Estimated OpenAI cost" icon={<WalletCards className="h-5 w-5" />} tone="rose" />
@@ -45,9 +45,9 @@ export function Overview({
         <div className="surface p-6">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <div className="eyebrow">Active workspace</div>
+              <div className="eyebrow">Current job</div>
               <h2 className="mt-2 text-lg font-semibold text-white">{job?.project || 'No job selected'}</h2>
-              <p className="mt-1 text-xs text-slate-400">{job ? `${job.job_id} · ${job.spreadsheet_id}` : 'Create a workspace or open an existing Job ID in Settings.'}</p>
+              <p className="mt-1 text-xs text-slate-400">{job ? `${job.job_id} · ${job.spreadsheet_id}` : 'Create a job or open an existing Job ID in Settings.'}</p>
             </div>
             {job && <StatusBadge status={statusLabel} />}
           </div>
@@ -71,9 +71,9 @@ export function Overview({
             </div>
           ) : (
             <EmptyState
-              title="No workspace loaded"
+              title="No job loaded"
               body="Create a new job against a clean Developer Test register or open an existing Job ID."
-              action={<Button tone="primary" onClick={() => onNavigate('new-job')}><Play className="h-4 w-4" /> Create workspace</Button>}
+              action={<Button tone="primary" onClick={() => onNavigate('new-job')}><Play className="h-4 w-4" /> Create a job</Button>}
             />
           )}
         </div>
@@ -81,6 +81,7 @@ export function Overview({
           <div className="eyebrow">Next steps</div>
           <h2 className="mt-2 text-lg font-semibold text-white">Keep the handoff clear</h2>
           <div className="mt-5 space-y-4">
+            <Action icon={<FolderOpen />} title="Browse projects" body="Open a project to see its jobs, create a job, or review a historical record." onClick={() => onNavigate('projects')} />
             <Action icon={<FolderOpen />} title="Process authorized scope" body="One Start advances every queued batch and discovered F-folder on the backend." onClick={() => onNavigate('job')} />
             <Action icon={<Clock3 />} title="Review evidence" body="Inspect batch statuses, validation checks, usage, and diagnostics." onClick={() => onNavigate('job')} />
             <Action icon={<ShieldCheck />} title="Operator guide" body="Drive Viewer, Sheets Editor, links/IDs, Start/Pause, and recovery." onClick={() => onNavigate('settings')} />

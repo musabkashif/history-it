@@ -3,11 +3,15 @@ import { createRoot } from 'react-dom/client'
 import { AppShell, type View } from './components/layout'
 import { Alert } from './components/ui'
 import { ApiError, api } from './lib/api'
-import type { Batch, CheckpointResponse, CompareResponse, JobForm, JobState, UsageResponse, ValidationResponse } from './lib/types'
-import { jobIsActive } from './lib/types'
+import type { Batch, CheckpointResponse, CompareResponse, ControlJob, ControlWorkspace, Health, JobForm, JobState, UsageResponse, ValidationResponse } from './lib/types'
+import { jobIsActive, displayJobStatus } from './lib/types'
+import { databaseWarning, jobScreen } from './lib/controlPlaneState'
 import { Overview } from './pages/Overview'
 import { NewJob } from './pages/NewJob'
 import { JobPage } from './pages/Job'
+import { ProjectsPage } from './pages/Projects'
+import { JobsPage } from './pages/Jobs'
+import { ControlJobPage } from './pages/ControlJob'
 import { BenchmarkPage } from './pages/Benchmark'
 import { SettingsPage } from './pages/Settings'
 import { LoginPage } from './pages/Login'
@@ -27,7 +31,7 @@ function App() {
   const [validation, setValidation] = useState<ValidationResponse | null>(null)
   const [checkpoint, setCheckpoint] = useState<CheckpointResponse | null>(null)
   const [comparison, setComparison] = useState<CompareResponse | null>(null)
-  const [health, setHealth] = useState<{ status?: string; configured?: boolean; developer_verification?: boolean } | null>(null)
+  const [health, setHealth] = useState<Health | null>(null)
   const [loading, setLoading] = useState(false)
   const [actionLoading, setActionLoading] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -35,6 +39,11 @@ function App() {
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [lastRefreshAt, setLastRefreshAt] = useState<string | null>(null)
   const [newJobError, setNewJobError] = useState<string | null>(null)
+  const [controlWorkspace, setControlWorkspace] = useState('')
+  const [controlProject, setControlProject] = useState('')
+  const [controlJobId, setControlJobId] = useState('')
+  const [draftProject, setDraftProject] = useState('')
+  const [openedFromProject, setOpenedFromProject] = useState(false)
 
   const jobIdRef = useRef<string | null>(null)
   const loadSeqRef = useRef(0)
@@ -74,7 +83,7 @@ function App() {
       setUsage(nextUsage)
       setValidation(nextValidation)
       localStorage.setItem(lastJobKey, id)
-      setHealth({ status: 'ok', configured: true })
+      setHealth(current => ({ ...(current || { status: 'ok' }), status: 'ok', configured: true }))
       setRefreshError(null)
       setLastRefreshAt(new Date().toISOString())
     } catch (e) {
@@ -235,12 +244,18 @@ function App() {
     return <LoginPage onAuthenticated={(name) => { setUsername(name); setAuthenticated(true) }} />
   }
 
+  function navigate(next: View) {
+    if (next === 'new-job') setDraftProject('')
+    setOpenedFromProject(false)
+    setView(next)
+  }
+
   const developerVerification = Boolean(health?.developer_verification)
 
   const page = view === 'overview'
-    ? <Overview job={job} batches={batches} usage={usage} onNavigate={setView} onRefresh={refresh} loading={loading} lastRefreshAt={lastRefreshAt} refreshError={refreshError} developerVerification={developerVerification} />
+    ? <Overview job={job} batches={batches} usage={usage} onNavigate={navigate} onRefresh={refresh} loading={loading} lastRefreshAt={lastRefreshAt} refreshError={refreshError} developerVerification={developerVerification} />
     : view === 'new-job'
-      ? <NewJob onCreated={() => setView('job')} create={createJob} error={newJobError} />
+      ? <NewJob key={draftProject || 'blank'} projectName={draftProject} onCreated={() => setView('job')} create={createJob} error={newJobError} />
       : view === 'job'
         ? <JobPage
             job={job}
@@ -266,21 +281,58 @@ function App() {
             onRetry={(id) => perform(() => api.retry(id), true, id)}
             onAuthorize={(folder, size) => perform(() => api.authorizeFolder(job?.job_id || '', folder, size), true, 'authorize')}
             onOpenBenchmark={() => setView('benchmark')}
+            onBackToProject={openedFromProject ? () => setView('jobs') : undefined}
           />
         : view === 'benchmark' && developerVerification
           ? <BenchmarkPage loading={actionLoading} error={error} checkpoint={checkpoint} comparison={comparison} onCheckpoint={async id => { const r = await perform(() => api.checkpoint(id), false, 'checkpoint'); if (r) setCheckpoint(r); if (!r) throw new Error('Verification did not return a response'); return r }} onCompare={async body => { const r = await perform(() => api.compare(body), false, 'compare'); if (r) setComparison(r); if (!r) throw new Error('Comparison did not return a response'); return r }} />
-          : <SettingsPage onOpenJob={openJob} currentJobId={job?.job_id || ''} />
+          : view === 'projects'
+            ? <ProjectsPage onOpenProject={(workspace: ControlWorkspace) => {
+                setControlWorkspace(workspace.workspace_id)
+                setControlProject(workspace.project_name || '')
+                setView('jobs')
+              }} />
+            : view === 'jobs'
+              ? <JobsPage
+                  workspaceId={controlWorkspace}
+                  projectName={controlProject}
+                  sheetsJob={job ? { job_id: job.job_id, project: job.project, status: displayJobStatus(job) } : null}
+                  onOpenJob={(row: ControlJob) => {
+                    setControlJobId(row.job_id)
+                    setControlWorkspace(row.workspace_id)
+                    if (jobScreen(row.source) === 'sheets') {
+                      setOpenedFromProject(true)
+                      void openJob(row.job_id)
+                      return
+                    }
+                    setView('control-job')
+                  }}
+                  onOpenSheetsJob={(id) => {
+                    setOpenedFromProject(true)
+                    void openJob(id)
+                  }}
+                  onCreateJob={() => {
+                    setDraftProject(controlProject)
+                    setOpenedFromProject(true)
+                    setView('new-job')
+                  }}
+                  onBack={() => setView('projects')}
+                />
+              : view === 'control-job'
+                ? <ControlJobPage jobId={controlJobId} workspaceId={controlWorkspace} onOpenSheets={openJob} onBack={() => setView('jobs')} />
+                : <SettingsPage onOpenJob={openJob} currentJobId={job?.job_id || ''} />
 
   return (
     <AppShell
       view={view}
-      setView={setView}
+      setView={navigate}
       health={health}
       username={username}
       projectName={job?.project}
       loadingJob={loading && !job}
       onLogout={logout}
       logoutLoading={logoutLoading}
+      databaseWarning={databaseWarning(health)}
+      inProject={view === 'new-job' && openedFromProject}
     >
       {error && view !== 'benchmark' && (
         <div className="mb-5">

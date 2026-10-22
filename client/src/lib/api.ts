@@ -1,4 +1,4 @@
-import type { BatchesResponse, CheckpointResponse, CompareResponse, Health, JobForm, JobState, UsageResponse, ValidationResponse } from './types'
+import type { BatchesResponse, CheckpointResponse, CompareResponse, ControlImportRequest, ControlJobDetail, ControlJobFilters, ControlListResponse, ControlWorkspace, ControlJob, Health, JobForm, JobState, UsageResponse, ValidationResponse } from './types'
 
 export const config = {
   baseUrl: (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, ''),
@@ -14,6 +14,22 @@ function readCookie(name: string): string {
     if (rawKey === name) return decodeURIComponent(rest.join('=') || '')
   }
   return ''
+}
+
+function detailMessage(data: unknown, response: Response): string {
+  if (typeof data === 'object' && data && 'detail' in data) {
+    const detail = (data as { detail: unknown }).detail
+    if (typeof detail === 'string' && detail.trim()) return detail
+    if (Array.isArray(detail)) {
+      const parts = detail.map(item => {
+        if (typeof item === 'string') return item
+        if (item && typeof item === 'object' && 'msg' in item) return String((item as { msg: unknown }).msg)
+        return ''
+      }).filter(Boolean)
+      if (parts.length) return parts.join('; ')
+    }
+  }
+  return `${response.status} ${response.statusText}`
 }
 
 function isMutating(method?: string) {
@@ -47,7 +63,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   let data: unknown = null
   try { data = text ? JSON.parse(text) : null } catch { data = text }
   if (!response.ok) {
-    const detail = typeof data === 'object' && data && 'detail' in data ? String((data as { detail: unknown }).detail) : `${response.status} ${response.statusText}`
+    const detail = detailMessage(data, response)
     throw new ApiError(response.status, detail)
   }
   return data as T
@@ -74,4 +90,19 @@ export const api = {
   authorizeFolder: (id: string, source_folder_id: string, batch_size?: number) => request<JobState>(`/api/jobs/${encodeURIComponent(id)}/folders`, { method: 'POST', body: JSON.stringify({ source_folder_id, batch_size: batch_size || undefined }) }),
   checkpoint: (spreadsheet_id: string) => request<CheckpointResponse>('/api/benchmark/f01-checkpoint', { method: 'POST', body: JSON.stringify({ spreadsheet_id }) }),
   compare: (body: { spreadsheet_id: string; benchmark_spreadsheet_id?: string; box?: string; folder?: string }) => request<CompareResponse>('/api/benchmark/compare', { method: 'POST', body: JSON.stringify(body) }),
+  controlWorkspaces: () => request<ControlListResponse<ControlWorkspace>>('/api/control/workspaces'),
+  controlCreateProject: (project_name: string, client_organization?: string) => request<{ state: string; inspection_started: boolean; already_applied: boolean; workspace: ControlWorkspace }>('/api/control/workspaces', { method: 'POST', body: JSON.stringify({ project_name, client_organization: client_organization || undefined }) }),
+  controlJobs: (filters: ControlJobFilters = {}) => {
+    const query = new URLSearchParams()
+    for (const [key, value] of Object.entries(filters)) {
+      if (value) query.set(key, value)
+    }
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return request<ControlListResponse<ControlJob>>(`/api/control/jobs${suffix}`)
+  },
+  controlJob: (id: string, workspaceId?: string) => request<ControlJobDetail>(`/api/control/jobs/${encodeURIComponent(id)}${workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : ''}`),
+  controlReopen: (id: string, workspace_id?: string) => request<ControlJobDetail>(`/api/control/jobs/${encodeURIComponent(id)}/reopen`, { method: 'POST', body: JSON.stringify({ workspace_id: workspace_id || undefined }) }),
+  controlResume: (id: string, workspace_id?: string) => request<ControlJobDetail>(`/api/control/jobs/${encodeURIComponent(id)}/resume`, { method: 'POST', body: JSON.stringify({ workspace_id: workspace_id || undefined }) }),
+  controlPause: (id: string, workspace_id?: string) => request<ControlJobDetail>(`/api/control/jobs/${encodeURIComponent(id)}/pause`, { method: 'POST', body: JSON.stringify({ workspace_id: workspace_id || undefined }) }),
+  controlImport: (body: ControlImportRequest) => request<ControlJobDetail>('/api/control/import', { method: 'POST', body: JSON.stringify(body) }),
 }

@@ -7,6 +7,7 @@ import { Button, Badge, EmptyState, SectionHeader, StatCard, StatusBadge, Alert,
 export function JobPage({
   job, batches, usage, validation, loading, error, refreshError, lastRefreshAt, actionLoading,
   onRefresh, onStart, onPause, onResume, onReconcile, onValidate, onRetry, onAuthorize, onOpenBenchmark,
+  onBackToProject,
   developerVerification = false,
 }: {
   job: JobState | null; batches: Batch[]; usage: UsageResponse | null; validation: ValidationResponse | null
@@ -14,6 +15,7 @@ export function JobPage({
   onRefresh: () => void; onStart: () => Promise<unknown>; onPause: () => Promise<unknown>; onResume: () => Promise<unknown>
   onReconcile: () => Promise<unknown>; onValidate: () => Promise<unknown>; onRetry: (batchId: string) => Promise<unknown>
   onAuthorize: (folder: string, size?: number) => Promise<unknown>; onOpenBenchmark: () => void
+  onBackToProject?: () => void
   developerVerification?: boolean
 }) {
   const [tab, setTab] = useState<'overview'|'batches'|'evidence'|'usage'>('overview')
@@ -54,8 +56,8 @@ export function JobPage({
   if (!job) {
     return (
       <>
-        <SectionHeader eyebrow="Odyssey console" title="Current job" description="Open an existing Job ID from Settings or create a new workspace." />
-        <EmptyState title="No job loaded" body="Create a workspace or open a Job ID. The console stays neutral until a project is selected." />
+        <SectionHeader eyebrow="Odyssey console" title="Current job" description="Open an existing Job ID from Settings, or create a job from a project." />
+        <EmptyState title="No job loaded" body="Create a job or open a Job ID. The console stays on this job until another one is opened." />
       </>
     )
   }
@@ -68,9 +70,14 @@ export function JobPage({
     <>
       <SectionHeader
         eyebrow="Odyssey console"
-        title={job.project || 'Untitled workspace'}
+        title={job.project || 'Current job'}
         description={`${job.job_id} · register ${job.spreadsheet_id}`}
-        actions={<Button tone="ghost" onClick={onRefresh} loading={loading}><RefreshCw className="h-4 w-4" /> Refresh</Button>}
+        actions={(
+          <>
+            {onBackToProject && <Button tone="ghost" onClick={onBackToProject}>Back to project</Button>}
+            <Button tone="ghost" onClick={onRefresh} loading={loading}><RefreshCw className="h-4 w-4" /> Refresh</Button>
+          </>
+        )}
       />
       <div className="mb-6 flex flex-wrap items-center gap-2">
         <StatusBadge status={statusLabel} />

@@ -5,8 +5,8 @@ import { Button, SectionHeader, Alert } from '../components/ui'
 
 const initial: JobForm = { project: '', source_folder_id: '', spreadsheet_id: '', batch_size: 10, box: '' }
 
-export function NewJob({ onCreated, create, error }: { onCreated: (job: JobState) => void; create: (form: JobForm) => Promise<JobState>; error?: string | null }) {
-  const [form, setForm] = useState<JobForm>(initial)
+export function NewJob({ onCreated, create, error, projectName = '' }: { onCreated: (job: JobState) => void; create: (form: JobForm) => Promise<JobState>; error?: string | null; projectName?: string }) {
+  const [form, setForm] = useState<JobForm>({ ...initial, project: projectName })
   const [localError, setLocalError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const submittingRef = useRef(false)
@@ -30,7 +30,7 @@ export function NewJob({ onCreated, create, error }: { onCreated: (job: JobState
   return (
     <>
       <SectionHeader
-        eyebrow="Workspace setup"
+        eyebrow="Job"
         title="Create a new job"
         description="Authorize one Drive folder or parent box and a clean Developer Test / Production Register. A parent discovers every immediate F-folder child; an individual folder queues only itself. Inspection never starts here."
       />

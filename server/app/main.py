@@ -5,6 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from googleapiclient.errors import HttpError
 from app.config import Settings
+from app.control_plane.api import build_router
+from app.control_plane.config import announce
+from app.control_plane.runtime import health_fields
+from app.control_plane.shadow import guarded_shadow
 from app.models import JobCreate, JobState, BenchmarkRequest, FolderAuthorize, F01CheckpointRequest, LoginRequest
 from app.adapters import Drive, Sheets
 from app.benchmark import CHECKPOINT_SHEETS, SPECS, compare_workbooks, f01_calibration_checkpoint
@@ -17,6 +21,7 @@ from app import auth
 DIAGNOSTICS_BUILD='2026-10-06-1'
 
 settings=Settings()
+announce(settings)
 app=FastAPI(title='HistoryIT Archive Itemization Automation MVP',version='0.1.0')
 _cors_origins = auth.allowed_origins(settings) or ['http://localhost:5173','http://127.0.0.1:5173']
 app.add_middleware(CORSMiddleware,allow_origins=_cors_origins,allow_credentials=True,allow_methods=['*'],allow_headers=['*'])
@@ -51,6 +56,16 @@ def google_http_exception(exc):
  code=status if status in (400,401,403,404,409,429) else 502
  return HTTPException(code,detail)
 
+def finish(operation, result):
+ """Shadow the Sheets result. A database failure must not change the Sheets response."""
+ job_id = result.get('job_id') if isinstance(result, dict) else getattr(result, 'job_id', None)
+ guarded_shadow(settings, operation, job_id, result, live)
+ return result
+
+def route_guard(request, token=None, mutating=False):
+ """Look up guard at call time so tests can patch app.main.guard."""
+ guard(request, token, mutating=mutating)
+
 def call(fn,*args):
  try:return fn(*args)
  except KeyError as e:raise HTTPException(404,str(e))
@@ -82,6 +97,7 @@ def health():
   'diagnostics_dir':str(__import__('pathlib').Path(settings.diagnostics_dir).resolve()),
   'login_configured':auth.login_configured(settings),
   'developer_verification':bool(settings.enable_developer_verification),
+  **health_fields(settings),
  }
 
 def _require_loopback(request: Request) -> None:
@@ -148,15 +164,15 @@ def hmac_compare(expected: str, provided: str) -> bool:
 
 @app.post('/api/jobs',response_model=JobState)
 def create(req:JobCreate,request:Request,x_api_token:str|None=Header(default=None)):
- guard(request,x_api_token,mutating=True);return call(live().create,req)
+ guard(request,x_api_token,mutating=True);return finish('create', call(live().create,req))
 @app.post('/api/jobs/{job_id}/folders',response_model=JobState)
 def authorize_folder(job_id:str,req:FolderAuthorize,request:Request,x_api_token:str|None=Header(default=None)):
- guard(request,x_api_token,mutating=True);return call(live().authorize_folder,job_id,req)
+ guard(request,x_api_token,mutating=True);return finish('authorize', call(live().authorize_folder,job_id,req))
 @app.post('/api/jobs/{job_id}/start',response_model=JobState)
 def start(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):
  # Synchronous admission so the response reflects running/already_running.
  # The worker thread owns batch/folder advancement; the browser need not stay open.
- guard(request,x_api_token,mutating=True);return call(live().start,job_id)
+ guard(request,x_api_token,mutating=True);return finish('start', call(live().start,job_id))
 @app.get('/api/jobs/{job_id}',response_model=JobState)
 def get_job(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):guard(request,x_api_token);return call(live().state,job_id)
 @app.get('/api/jobs/{job_id}/batches')
@@ -166,11 +182,11 @@ def batches(job_id:str,request:Request,x_api_token:str|None=Header(default=None)
 def usage(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):
  guard(request,x_api_token);o=live();sid,rows=call(o._job,job_id);return {'job_id':job_id,'usage':o._usage(sid,job_id),'total_cost_usd':o.cost(sid,job_id),'alert':o.alert(rows)}
 @app.post('/api/jobs/{job_id}/pause',response_model=JobState)
-def pause(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):guard(request,x_api_token,mutating=True);return call(live().pause,job_id)
+def pause(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):guard(request,x_api_token,mutating=True);return finish('pause', call(live().pause,job_id))
 @app.post('/api/jobs/{job_id}/resume',response_model=JobState)
-def resume(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):guard(request,x_api_token,mutating=True);return call(live().resume,job_id)
+def resume(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):guard(request,x_api_token,mutating=True);return finish('resume', call(live().resume,job_id))
 @app.post('/api/batches/{batch_id}/retry')
-def retry(batch_id:str,request:Request,x_api_token:str|None=Header(default=None)):guard(request,x_api_token,mutating=True);return call(live().retry,batch_id)
+def retry(batch_id:str,request:Request,x_api_token:str|None=Header(default=None)):guard(request,x_api_token,mutating=True);return finish('retry', call(live().retry,batch_id))
 @app.post('/api/jobs/{job_id}/reconcile')
 def reconcile(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):
     guard(request,x_api_token,mutating=True)
@@ -267,3 +283,5 @@ def f01_checkpoint(req:F01CheckpointRequest,request:Request,x_api_token:str|None
         except Exception:
             pass
     return result
+
+app.include_router(build_router(settings, route_guard, lambda: live().sheets))
