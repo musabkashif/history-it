@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { useState } from 'react'
-import { Activity, ChevronRight, FileCheck2, Folders, LayoutDashboard, LogOut, Menu, PlayCircle, Settings, X } from 'lucide-react'
-import { Alert, Badge, Button } from './ui'
+import { BookOpen, ChevronRight, FileCheck2, Folders, LayoutDashboard, LogOut, Menu, PlayCircle, X } from 'lucide-react'
+import { Alert, Button } from './ui'
 
 export type View = 'overview'|'new-job'|'job'|'benchmark'|'settings'|'projects'|'jobs'|'control-job'
 
@@ -57,7 +57,7 @@ export function AppShell({
     ...(developerVerification
       ? [{ id: 'benchmark' as const, label: 'Developer: Box 19 verify', icon: FileCheck2 }]
       : []),
-    { id: 'settings' as const, label: 'Settings', icon: Settings },
+    { id: 'settings' as const, label: 'Guide', icon: BookOpen },
   ]
   return (
     <div className="min-h-screen bg-canvas text-ink">
@@ -88,15 +88,10 @@ export function AppShell({
             )
           })}
         </nav>
-        <div className="mt-auto rounded-xl border border-line/50 bg-white/[.03] p-3">
-          <div className="flex items-center gap-2 text-xs font-medium text-slate-200"><Activity className="h-3.5 w-3.5 text-cyan" /> Connection</div>
-          <div className="mt-2 flex items-center justify-between">
-            <span className="text-xs text-slate-300">{health?.status === 'ok' ? 'Connected' : health?.status === 'offline' ? 'Offline' : 'Checking'}</span>
-            <Badge tone={health?.status === 'ok' ? 'success' : health?.status === 'offline' ? 'danger' : 'neutral'}>{health?.status === 'ok' ? 'On' : health?.status === 'offline' ? 'Off' : '…'}</Badge>
-          </div>
-          {username && <div className="mt-3 truncate text-[11px] text-slate-300">Signed in as <span className="text-white">{username}</span></div>}
+        <div className="mt-auto pt-4">
+          {username && <div className="truncate px-3 text-[11px] text-slate-300">Signed in as <span className="text-white">{username}</span></div>}
           {onLogout && (
-            <Button tone="ghost" loading={logoutLoading} className="mt-2 w-full justify-start px-2" onClick={onLogout}>
+            <Button tone="ghost" loading={logoutLoading} className="mt-1 w-full justify-start px-3" onClick={onLogout}>
               <LogOut className="h-4 w-4" /> Logout
             </Button>
           )}
@@ -122,7 +117,6 @@ export function AppShell({
                 <LogOut className="h-4 w-4" /> Logout
               </Button>
             )}
-            <button onClick={() => setView('settings')} className="rounded-lg p-2 text-slate-400 hover:bg-white/5 hover:text-slate-100" aria-label="Settings"><Settings className="h-4 w-4" /></button>
           </div>
         </header>
         <div className="mx-auto max-w-[1480px] px-4 py-7 sm:px-8">

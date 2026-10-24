@@ -13,6 +13,28 @@ def _status(exc):
     except (TypeError, ValueError):
         return None
 
+class SheetResizeError(ValueError):
+    """The service account cannot resize a worksheet. Retrying will not add columns."""
+
+
+def sheet_resize_denied(note: str) -> bool:
+    """True when a batch note is a worksheet resize permission failure."""
+    return 'service account lacks permission to resize' in (note or '').casefold()
+
+
+def _permission_denied(exc):
+    return _status(exc) in (401, 403)
+
+
+def _resize_denied_message(sheet, current, required):
+    current_text = 'an unknown number of' if current is None else str(current)
+    return (
+        f'Service account lacks permission to resize {sheet}. '
+        f'The worksheet grid has {current_text} columns and {required} are required. '
+        'This failure is not retryable until an editor grants access. Existing cells were not changed.'
+    )
+
+
 def _retryable(exc):
     status = _status(exc)
     if status == 429 or (status is not None and status >= 500):
@@ -58,7 +80,7 @@ class Drive:
         while True:
             response = self._execute(lambda folder_id=folder_id, token=token: self.api.files().list(
                 q=f"'{folder_id}' in parents and trashed = false",
-                fields='nextPageToken,files(id,name,mimeType)',
+                fields='nextPageToken,files(id,name,mimeType,md5Checksum)',
                 pageSize=1000,
                 pageToken=token,
                 supportsAllDrives=True,
@@ -72,11 +94,22 @@ class Drive:
 
     def enumerate(self, root: str):
         """Enumerate authorized images. Parent roots discover only immediate F* children."""
+        sources, _skipped = self.discover(root)
+        return sources
+
+    def discover(self, root: str):
+        """Return processable images and Skipped / Empty immediate F folders.
+
+        Filename is not an identity. Two Drive files may share a name. An empty
+        F folder is skipped. The caller fails only when no folder has images.
+        """
         from app.models import Source
         from app.box_folders import (
             detect_ambiguous_f_folders,
+            flag_probable_duplicates,
             is_f_folder_name,
             natural_f_key,
+            partition_immediate_folders,
             select_authorized_sources,
         )
         root_name = self._execute(lambda: self.api.files().get(fileId=root, fields='name', supportsAllDrives=True))['name']
@@ -92,7 +125,7 @@ class Drive:
             conflicts = detect_ambiguous_f_folders([child.get('name') for child in f_children])
             if conflicts:
                 raise ValueError('Ambiguous F-folder identities: ' + '; '.join(conflicts))
-            out = []
+            folders = []
             for child in sorted(f_children, key=lambda item: natural_f_key(item.get('name'))):
                 folder_id = child['id']
                 folder_name = child['name']
@@ -104,26 +137,15 @@ class Drive:
                         f'Authorized F-folder {folder_name} ({folder_id}) is inaccessible and cannot be skipped: {exc}'
                     ) from exc
                 images = [
-                    Source(
-                        id=entry['id'],
-                        name=entry['name'],
-                        folder_id=folder_id,
-                        folder_name=folder_name,
-                        path=f"{path}/{entry['name']}",
-                        mime_type=entry['mimeType'],
-                    )
+                    self._source(entry, folder_id, folder_name, path)
                     for entry in entries
                     if entry.get('mimeType') in IMAGE_MIME
                 ]
-                if not images:
-                    raise ValueError(
-                        f'Authorized F-folder {folder_name} ({folder_id}) contains no images and cannot be skipped'
-                    )
-                out.extend(sorted(images, key=lambda item: (item.path, item.id)))
-            out = select_authorized_sources(out)
-            if len({source.name for source in out}) != len(out):
-                raise ValueError('Duplicate source filename across folder hierarchy; cannot reconcile Asset QC by filename')
-            return out
+                folders.append({'folder_id': folder_id, 'folder_name': folder_name, 'images': images})
+            sources, skipped = partition_immediate_folders(folders)
+            sources = flag_probable_duplicates(select_authorized_sources(sources))
+            self._reject_duplicate_file_ids(sources)
+            return sources, skipped
 
         seen, out, stack = set(), [], [(root, root_name)]
         while stack:
@@ -139,19 +161,30 @@ class Drive:
                 if entry['mimeType'] == 'application/vnd.google-apps.folder':
                     stack.append((entry['id'], path + '/' + entry['name']))
                 elif entry['mimeType'] in IMAGE_MIME:
-                    out.append(Source(
-                        id=entry['id'],
-                        name=entry['name'],
-                        folder_id=fid,
-                        folder_name=path.rsplit('/', 1)[-1] or fid,
-                        path=path + '/' + entry['name'],
-                        mime_type=entry['mimeType'],
-                    ))
+                    out.append(self._source(entry, fid, path.rsplit('/', 1)[-1] or fid, path))
         out.sort(key=lambda source: (source.path, source.id))
-        out = select_authorized_sources(out)
-        if len({source.name for source in out}) != len(out):
-            raise ValueError('Duplicate source filename across folder hierarchy; cannot reconcile Asset QC by filename')
-        return out
+        out = flag_probable_duplicates(select_authorized_sources(out))
+        self._reject_duplicate_file_ids(out)
+        return out, []
+
+    @staticmethod
+    def _source(entry, folder_id, folder_name, path):
+        from app.models import Source
+        return Source(
+            id=entry['id'],
+            name=entry['name'],
+            folder_id=folder_id,
+            folder_name=folder_name,
+            path=f"{path}/{entry['name']}",
+            mime_type=entry['mimeType'],
+            content_hash=str(entry.get('md5Checksum') or ''),
+        )
+
+    @staticmethod
+    def _reject_duplicate_file_ids(sources):
+        ids = [source.id for source in sources]
+        if len(ids) != len(set(ids)):
+            raise ValueError('Duplicate Drive file ID in the authorized source set')
 
     def image(self, source):
         # Only called by inspection. Never injected into the commit service.
@@ -224,6 +257,77 @@ class Sheets:
         while index: index,r=divmod(index-1,26);s=chr(65+r)+s
         return s
 
+    def _grid(self, sid, sheet):
+        """Return the worksheet id and its current column count. Does not read cells."""
+        meta = self._execute(lambda: self.api.get(
+            spreadsheetId=sid,
+            fields='sheets.properties(sheetId,title,gridProperties.columnCount)',
+        ))
+        for item in meta.get('sheets') or []:
+            props = item.get('properties') or {}
+            if props.get('title') != sheet:
+                continue
+            sheet_id = props.get('sheetId')
+            if sheet_id is None:
+                raise ValueError(f'Worksheet id missing: {sheet}')
+            count = int((props.get('gridProperties') or {}).get('columnCount') or 0)
+            return sheet_id, count
+        raise ValueError(f'Worksheet not found: {sheet}')
+
+    def _expand_grid(self, sid, sheet, required):
+        """Grow the grid at the right edge. Never inserts, moves, or shrinks columns."""
+        try:
+            sheet_id, column_count = self._grid(sid, sheet)
+        except SheetResizeError:
+            raise
+        except Exception as exc:
+            if _permission_denied(exc):
+                raise SheetResizeError(_resize_denied_message(sheet, None, required)) from exc
+            raise
+        if column_count >= required:
+            return
+        body = {'requests': [{'updateSheetProperties': {
+            'properties': {'sheetId': sheet_id, 'gridProperties': {'columnCount': required}},
+            'fields': 'gridProperties.columnCount',
+        }}]}
+        try:
+            self._execute(lambda: self.api.batchUpdate(spreadsheetId=sid, body=body))
+        except SheetResizeError:
+            raise
+        except Exception as exc:
+            if _permission_denied(exc):
+                raise SheetResizeError(_resize_denied_message(sheet, column_count, required)) from exc
+            raise
+
+    def ensure_columns(self, sid, sheet, names):
+        """Append identity columns. Existing data rows are not rewritten.
+
+        A worksheet whose grid stops on the last header does not grow when a
+        cell is written past that edge. Expand to the required column count
+        first, then write the new headers in the new columns. Repeat calls
+        find the headers and do nothing.
+        """
+        header_row, columns = self.headers(sid, sheet)
+        missing = [name for name in names if name not in columns]
+        if not missing:
+            return
+        start = max(columns.values()) + 1
+        required = start + len(missing)
+        self._expand_grid(sid, sheet, required)
+        for offset, name in enumerate(missing):
+            cell = f"'{sheet}'!{self.col(start + offset)}{header_row}"
+            try:
+                self._put(sid, cell, [[name]])
+            except SheetResizeError:
+                raise
+            except Exception as exc:
+                if _permission_denied(exc):
+                    raise SheetResizeError(_resize_denied_message(sheet, required, required)) from exc
+                raise
+            # A later failure must re-read the header that was just stored.
+            self._headers.pop((sid, sheet), None)
+            self._cache.pop((sid, sheet), None)
+
     def write(self,sid,sheet,row,key=None):
         h,headers=self.headers(sid,sheet)
         existing=self.rows(sid,sheet)
@@ -233,6 +337,11 @@ class Sheets:
             matches=[r for r in existing if key and r.get(key[0])==str(key[1])]
         if len(matches)>1: raise ValueError(f'Duplicate key in {sheet}: {key}')
         unknown=set(row)-set(headers)
+        identity=[name for name in ('Drive File ID', 'Source Folder ID') if name in unknown]
+        if identity:
+            self.ensure_columns(sid, sheet, identity)
+            h, headers = self.headers(sid, sheet)
+            unknown=set(row)-set(headers)
         if unknown: raise ValueError(f'Missing columns in {sheet}: {unknown}')
         if matches:
             target=matches[0]['_row']

@@ -147,6 +147,60 @@ def calibration_conflicts(assets, records, reference, filenames) -> list[str]:
             problems.append(f'{label} has no Record Staging row')
             continue
         problems.extend(_outcome_conflicts(label, record, present, outcome))
+    problems.extend(_filename_rule_conflicts(assets, records, reference, authorized))
+    return problems
+
+
+def _filename_rule_conflicts(assets, records, reference, authorized) -> list[str]:
+    """Check filenames named by this folder's calibration. Do not rewrite staging.
+
+    A longer match wins, so Photograph_016b is not judged by the Photograph_016 rule.
+    Rules apply only when that filename is in the authorized batch.
+    """
+    rules = reference.get('filename_rules') or []
+    if not rules:
+        return []
+    problems = []
+    grouped = {}
+    for asset in assets:
+        name = _field(asset, 'digital_asset', 'Digital Asset')
+        if name not in authorized:
+            continue
+        matches = [rule for rule in rules if rule.get('contains') and str(rule['contains']) in name]
+        if not matches:
+            continue
+        rule = max(matches, key=lambda item: len(str(item.get('contains') or '')))
+        label = str(rule.get('contains'))
+        expected_action = str(rule.get('action') or '')
+        actual_action = _field(asset, 'action_needed', 'Action Needed')
+        if expected_action and actual_action != expected_action:
+            problems.append(
+                f'{name} Action Needed is {actual_action or "blank"}; approved calibration example is {expected_action}'
+            )
+        if str(rule.get('production_tasks') or '').casefold() == 'none' and actual_action.casefold() not in _NO_TASK:
+            problems.append(f'{name} has production action {actual_action or "blank"}; approved calibration example has no crop')
+        blob = ' '.join((
+            _field(asset, 'qc_note', 'QC Note'),
+            _field(asset, 'task_note', 'Production Task Note'),
+            _field(asset, 'exception_note', 'Exception / Duplicate Note'),
+        )).casefold()
+        for phrase in rule.get('note_must_include') or []:
+            if str(phrase).casefold() not in blob:
+                problems.append(f'{name} does not record the required calibration note {phrase}')
+        expected_kind = str(rule.get('record_kind') or '')
+        record_id = _field(asset, 'assigned_record_id', 'Assigned Record ID')
+        record = next((row for row in records if _field(row, 'proposed_record_id', 'Proposed Record ID') == record_id), None)
+        actual_kind = _field(record, 'record_kind', 'Record Kind') if record is not None else ''
+        if expected_kind and actual_kind != expected_kind:
+            problems.append(
+                f'{name} Record Kind is {actual_kind or "blank"}; approved calibration example is {expected_kind}'
+            )
+        group = str(rule.get('group') or '')
+        if group:
+            grouped.setdefault(group, []).append(record_id)
+    for group, ids in grouped.items():
+        if len(set(ids)) > 1:
+            problems.append(f'{group} assets were not kept on one record')
     return problems
 
 

@@ -136,6 +136,12 @@ def completed_processing_unit(queue_rows, done):
     return f"{canon(last.get('Source Group / Folder'))} (Completed - Validated) through {canon(last.get('End Filename'))}"
 
 
+def active_box(queue_rows):
+    committed = [row for row in queue_rows if canon(row.get('Batch Status')) == 'Committed - Validated']
+    row = committed[-1] if committed else (queue_rows[-1] if queue_rows else None)
+    return canon(row.get('Box')) if row else ''
+
+
 def authorization_scope(queue_rows):
     parts = []
     for row in queue_rows:
@@ -200,9 +206,19 @@ def _stale_next(current, queue_rows):
     if text in ('', 'None'):
         return True
     folded = text.casefold()
+    if 'developer' in folded:
+        return True
     for name in _committed_filenames(queue_rows):
         if name and name in text:
             return True
+    pending = {
+        canon(row.get('Start Filename'))
+        for row in queue_rows
+        if canon(row.get('Batch Status')) != 'Committed - Validated' and canon(row.get('Start Filename'))
+    }
+    # A leftover source filename is initialization residue unless it is the next authorized batch.
+    if text not in pending and folded.endswith(('.jpg', '.jpeg', '.png', '.tif', '.tiff', '.webp')):
+        return True
     return 'f01_001' in folded and any(
         'F01_001' in canon(row.get('Start Filename'))
         and canon(row.get('Batch Status')) == 'Committed - Validated'
@@ -236,6 +252,10 @@ def _stale_resume(current):
     if 'enumerate the source folder once' in folded:
         return True
     return re.search(r'(?<!do not )begin f01', folded) is not None
+
+
+def _has_continuation_field(rows, name):
+    return any(canon(row.get('State Field')) == name for row in rows)
 
 
 def _continuation_value(rows, name):
@@ -319,7 +339,10 @@ def plan_reconciliation(queue_rows, folder_rows, asset_rows, record_rows, contin
         'Completed folder count is derived from Folder Processing Unit Summary',
     ))
     status_current = canon(box_row.get('Box Status')) if box_row else ''
-    status_desired = box_status(queue_rows, done, open_item, item_rows)
+    # A folder is finished when its queue batches are validated. The folder
+    # summary note is the same fact when that row has already been written.
+    status_done = list(dict.fromkeys([*done, *_queue_done(queue_rows)]))
+    status_desired = box_status(queue_rows, status_done, open_item, item_rows)
     if status_current == status_desired:
         status_action = 'ok'
     elif status_current in ('', 'In Progress') and status_desired == 'In Progress':
@@ -336,6 +359,7 @@ def plan_reconciliation(queue_rows, folder_rows, asset_rows, record_rows, contin
     derived = {
         'Current Completed Processing Unit': completed_processing_unit(queue_rows, done),
         'Next Authorized / Unprocessed Folder': next_unprocessed_source(queue_rows, done, open_item),
+        'Active Box': active_box(queue_rows) if _has_continuation_field(continuation_rows, 'Active Box') else '',
         'Source Processing Authorization': authorization_scope(queue_rows),
         'Resume Instruction': resume_instruction(done, open_item if open_item != 'None' else '', queue_rows),
         'Last Closed Item': last_closed_item(record_rows, open_item if open_item != 'None' else ''),
@@ -343,6 +367,7 @@ def plan_reconciliation(queue_rows, folder_rows, asset_rows, record_rows, contin
     stale = {
         'Current Completed Processing Unit': lambda current: canon(current).casefold() in ('', 'none') or canon(current).casefold().startswith('none'),
         'Next Authorized / Unprocessed Folder': lambda current: _stale_next(current, queue_rows),
+        'Active Box': lambda current: True,
         'Source Processing Authorization': lambda current: canon(current).casefold() in ('', 'none') or 'not yet batched' in canon(current).casefold(),
         'Resume Instruction': _stale_resume,
         'Last Closed Item': lambda current: canon(current).casefold() in ('', 'none') or canon(current).casefold().startswith('none'),
@@ -543,3 +568,125 @@ def _read_back_run_context(sheets, sid, readback):
         f'Run Context {field} read back {observed.get(field)!r}, expected {value!r}'
         for field, value in expected.items() if observed.get(field) != value
     ] or ['Run Context could not be read back'])
+
+
+_CONTROLLED_CONTINUATION = {
+    'Open Intellectual Item',
+    'Unresolved Boundary Item',
+    'Current Completed Processing Unit',
+    'Next Authorized / Unprocessed Folder',
+    'Active Box',
+    'Source Processing Authorization',
+    'Resume Instruction',
+    'Last Closed Item',
+}
+
+
+def _box_metrics(sheets, sid, project, box):
+    from dataclasses import asdict
+    from client_reference.commit_engine import calculate_metrics
+    from app.commit import METRICS
+
+    def scoped(sheet):
+        selected = []
+        for row in sheets.rows(sid, sheet):
+            row_project = (row.get('Project') or '').strip()
+            row_box = (row.get('Box') or '').strip()
+            if project and row_project and row_project != project:
+                continue
+            if box and row_box and row_box != box:
+                continue
+            selected.append(row)
+        return selected
+
+    metrics = calculate_metrics({
+        'Asset QC': scoped('Asset QC'),
+        'Itemization': scoped('Itemization'),
+        'Metadata References': scoped('Metadata References'),
+        'Production Queue': scoped('Production Queue'),
+        'Ready for Metadata': scoped('Ready for Metadata'),
+    })
+    return {label: str(getattr(metrics, attr)) for label, attr in METRICS.items()}
+
+
+def _queue_done(queue_rows):
+    folders = []
+    for row in queue_rows:
+        folder = canon(row.get('Source Group / Folder'))
+        if folder and folder not in folders:
+            folders.append(folder)
+    done = []
+    for folder in folders:
+        batches = [row for row in queue_rows if canon(row.get('Source Group / Folder')) == folder]
+        if batches and all(canon(row.get('Batch Status')) == 'Committed - Validated' for row in batches):
+            done.append(folder)
+    return done
+
+
+def _initialized_box(row) -> bool:
+    text = ' '.join(str(row.get(name) or '') for name in ('Box Status', 'Notes', 'Open Context')).casefold()
+    assets = str(row.get('Source Assets') or '').strip()
+    return assets in ('', '0') and ('in progress' in text or 'no source assets committed' in text)
+
+
+def finalize_completed_box(sheets, sid, project, box, queue_rows):
+    """Make one box summary match the finished queue.
+
+    Calling this again writes the same box values. Folder totals stay on the
+    folder summary, and batch Project Register rows keep the counts written
+    at their own commit. An initialized zero row is updated instead of left
+    beside a second production row.
+    """
+    if not queue_rows or not box:
+        return {'box': box, 'updated': False}
+    committed = [row for row in queue_rows if canon(row.get('Batch Status')) == 'Committed - Validated']
+    open_item = canon(committed[-1].get('Resulting Open Item')) if committed else 'None'
+    if not open_item:
+        open_item = 'None'
+    items = [row for row in sheets.rows(sid, 'Itemization') if not project or not row.get('Project') or row.get('Project') == project]
+    status = box_status(queue_rows, _queue_done(queue_rows), open_item, items)
+    labels = _box_metrics(sheets, sid, project, box)
+    payload = {
+        'Box': box,
+        'Box Status': status,
+        'Source Assets': labels['Source Assets'],
+        'Odyssey Metadata Records': labels['Odyssey Metadata Records'],
+        'Metadata Only References': labels['Metadata Only References'],
+        'Ready Records': labels['Ready Records'],
+        'Blocked - Cropping/QC': labels['Blocked - Cropping/QC'],
+        'Blocked - Additional Imaging': labels['Blocked - Additional Imaging'],
+        'Review Records': labels['Review Records'],
+        'Content-Linked Assets': labels['Content-Linked Assets'],
+        'Logical Components': labels['Logical Components'],
+        'Production Tasks': labels['Production Tasks'],
+        'Open Item': open_item,
+        'Open Context': open_item,
+    }
+    box_rows = sheets.rows(sid, 'Box Summary')
+    blank = [row for row in box_rows if not canon(row.get('Box')) and _initialized_box(row)]
+    named = [row for row in box_rows if canon(row.get('Box')) == box]
+    if blank and named:
+        for index, _row in enumerate(named):
+            sheets.write(sid, 'Box Summary', {
+                'Box': f'Superseded {box} {index + 1}',
+                'Box Status': '',
+                'Source Assets': '',
+                'Notes': 'Superseded by the authoritative box summary',
+            }, ('Box', box))
+        sheets.write(sid, 'Box Summary', payload, ('Box', ''))
+    elif named or blank:
+        key_box = '' if blank and not named else box
+        sheets.write(sid, 'Box Summary', payload, ('Box', key_box))
+    else:
+        sheets.write(sid, 'Box Summary', payload, ('Box', box))
+    if status == 'Completed - Validated':
+        sentence = f"Completed - Validated. {labels['Source Assets']} source assets committed."
+        for row in sheets.rows(sid, 'Continuation State'):
+            field = canon(row.get('State Field'))
+            if not field or field in _CONTROLLED_CONTINUATION:
+                continue
+            current = canon(row.get('Current Value'))
+            folded = current.casefold()
+            if folded == 'in progress' or 'no source assets committed' in folded:
+                sheets.set_field(sid, field, sentence)
+    return {'box': box, 'status': status, 'metrics': labels, 'updated': True}

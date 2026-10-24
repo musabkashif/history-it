@@ -64,6 +64,12 @@ class MemorySheets:
 
     def clear(self, sid, sheet, row_number, key):
         rows = self.store.get((sid, sheet), [])
+        if isinstance(key, list):
+            self.store[(sid, sheet)] = [
+                row for row in rows
+                if not all(str(row.get(name)) == str(value) for name, value in key)
+            ]
+            return
         self.store[(sid, sheet)] = [row for row in rows if str(row.get(key[0])) != str(key[1])]
 
     def field(self, sid, name):
@@ -878,7 +884,7 @@ class CalibrationTests(unittest.TestCase):
         other = resolve_reference(root, 'Other Project', 'Chapters Box 31', 'F04')
         f01 = resolve_reference(root, 'Tri Delta Chapters', 'Chapters Box 19', 'F01')
         self.assertEqual(f04['reference_id'], 'tri-delta-chapters-box31-f04-calibration')
-        self.assertEqual(f04['version'], '2026-10-20.1')
+        self.assertEqual(f04['version'], '2026-10-24.1')
         self.assertEqual(f04['box'], 'Chapters Box 31')
         self.assertEqual(f04['applies_to_folders'], ['F04'])
         self.assertEqual(f04['material_class'], 'client-approved-calibration-example')
@@ -902,11 +908,11 @@ class CalibrationTests(unittest.TestCase):
             assets=[
                 box31_asset(BOX31_SHEET, 'sheet'),
                 box31_asset(BOX31_VERSO, 'sheet'),
-                *[box31_asset(filename, 'photo') for filename in BOX31_PHOTOS],
+                *[box31_asset(filename, 'photo', action='Archival Border Crop') for filename in BOX31_PHOTOS],
             ],
             records=[
                 box31_record('sheet', 'Metadata Only', 'Metadata Only', readiness='Metadata Reference', role='Descriptive Reference', confidence=''),
-                box31_record('photo', 'Normal Odyssey', 'Photographic Image', 'Photograph'),
+                box31_record('photo', 'Normal Odyssey', 'Photographic Image', 'Photograph', readiness='Blocked - Cropping/QC'),
             ],
         )
         sheets = MemorySheets()
@@ -932,12 +938,14 @@ class CalibrationTests(unittest.TestCase):
             self.assertIn(filename, items[0]['Digital Assets'])
         self.assertNotIn(BOX31_SHEET, items[0]['Digital Assets'])
         self.assertNotIn(BOX31_VERSO, items[0]['Digital Assets'])
-        self.assertEqual(sheets.rows('register', 'Production Queue'), [])
+        queued = sheets.rows('register', 'Production Queue')
+        self.assertEqual(sorted(row['Digital Asset'] for row in queued), sorted(BOX31_PHOTOS))
+        self.assertTrue(all(row['Action Needed'] == 'Archival Border Crop' for row in queued))
 
     def test_photograph_009_stays_normal_when_the_reference_files_are_absent(self):
         output = InspectionOutput(
-            assets=[box31_asset(filename, 'photo') for filename in BOX31_PHOTOS],
-            records=[box31_record('photo', 'Normal Odyssey', 'Photographic Image', 'Photograph')],
+            assets=[box31_asset(filename, 'photo', action='Archival Border Crop') for filename in BOX31_PHOTOS],
+            records=[box31_record('photo', 'Normal Odyssey', 'Photographic Image', 'Photograph', readiness='Blocked - Cropping/QC')],
         )
         sheets = MemorySheets()
         install_job(sheets, [box31_batch(BOX31_PHOTOS)])

@@ -79,6 +79,29 @@ def split_assets(value: object) -> List[str]:
     return [x.strip() for x in normalize(value).split(";") if x.strip()]
 
 
+def asset_identity(row: Mapping[str, str]) -> str:
+    """Drive file ID + filename + parent folder, or the filename for a legacy row.
+
+    Two Drive files may share a filename. A row that has no file ID stays
+    addressable by that filename so existing registers still reconcile.
+    """
+    file_id = normalize(row.get("Drive File ID") or row.get("id"))
+    name = normalize(row.get("Digital Asset") or row.get("name"))
+    folder = normalize(
+        row.get("Source Folder ID")
+        or row.get("folder_id")
+        or row.get("Source Group / Folder")
+        or row.get("folder_name")
+    )
+    if file_id:
+        return f"{file_id}|{name}|{folder}"
+    return name
+
+
+def _additional_imaging(action: object) -> bool:
+    return "additional imaging" in normalize(action).casefold()
+
+
 def unique_index(rows: Sequence[Mapping[str, str]], key: str) -> Dict[str, Mapping[str, str]]:
     out: Dict[str, Mapping[str, str]] = {}
     for row in rows:
@@ -116,11 +139,12 @@ def validate_staging(
     filenames = [normalize(r.get("Digital Asset")) for r in asset_rows]
     if any(not f for f in filenames):
         raise CommitError("Every Asset Staging row must have Digital Asset")
-    if len(set(filenames)) != len(filenames):
-        raise CommitError("Duplicate Digital Asset inside Asset Staging")
+    identities = [asset_identity(r) for r in asset_rows]
+    if len(set(identities)) != len(identities):
+        raise CommitError("Duplicate asset identity inside Asset Staging")
 
-    existing_names = {normalize(r.get("Digital Asset")) for r in existing_asset_qc_rows}
-    dupes = sorted(set(filenames) & existing_names)
+    existing_names = {asset_identity(r) for r in existing_asset_qc_rows}
+    dupes = sorted(set(identities) & existing_names)
     if dupes:
         raise CommitError(f"Staged assets already exist in Asset QC: {dupes}")
 
@@ -159,7 +183,7 @@ def build_asset_qc_row(asset: Mapping[str, str], record: Mapping[str, str]) -> D
     kind = normalize(record.get("Record Kind"))
     template = normalize(record.get("Template")) if kind == "Normal Odyssey" else "Metadata Only"
     type_value = normalize(record.get("Type")) if kind == "Normal Odyssey" else ""
-    return {
+    row = {
         "Project": normalize(asset.get("Project")),
         "Processing Unit / Source Folder": normalize(asset.get("Processing Unit / Source Folder")),
         "Digital Asset": normalize(asset.get("Digital Asset")),
@@ -179,6 +203,13 @@ def build_asset_qc_row(asset: Mapping[str, str], record: Mapping[str, str]) -> D
         "Production Queue Eligible": normalize(asset.get("Production Queue Eligible")),
         "Exception / Duplicate Note": normalize(asset.get("Exception / Duplicate Note")),
     }
+    file_id = normalize(asset.get("Drive File ID"))
+    folder_id = normalize(asset.get("Source Folder ID"))
+    if file_id:
+        row["Drive File ID"] = file_id
+    if folder_id:
+        row["Source Folder ID"] = folder_id
+    return row
 
 
 def build_itemization_row(record: Mapping[str, str]) -> Dict[str, str]:
@@ -258,26 +289,35 @@ def build_task_rows(
         prefix = task_prefix_from_record_id(rid)
         if prefix not in counters:
             counters[prefix] = next_task_sequence(existing_tasks, prefix)
-        seq = counters[prefix]
-        counters[prefix] += 1
-        out.append({
-            "Project": normalize(asset.get("Project")),
-            "Processing Unit / Source Folder": normalize(asset.get("Processing Unit / Source Folder")),
-            "Task ID": f"{prefix}{seq:03d}",
-            "Assigned Record ID": rid,
-            "Digital Asset": normalize(asset.get("Digital Asset")),
-            "Box": normalize(asset.get("Box")),
-            "Source Group / Folder": normalize(asset.get("Source Group / Folder")),
-            "Template": normalize(rec.get("Template")),
-            "Type": normalize(rec.get("Type")),
-            "Action Needed": normalize(asset.get("Action Needed")),
-            "Task Scope": normalize(asset.get("Production Task Scope")),
-            "Expected Output Asset Count": normalize(asset.get("Expected Output Asset Count")),
-            "Task Status": "Open",
-            "QC Confidence": normalize(asset.get("QC Confidence")),
-            "Production Note": normalize(asset.get("Production Task Note")),
-            "Carried Forward From": "",
-        })
+        primary = normalize(asset.get("Action Needed"))
+        actions = ["Rotate", "Archival Border Crop"] if primary == "Rotate + Archival Border Crop" else [primary]
+        for action in actions:
+            seq = counters[prefix]
+            counters[prefix] += 1
+            out.append({
+                "Project": normalize(asset.get("Project")),
+                "Processing Unit / Source Folder": normalize(asset.get("Processing Unit / Source Folder")),
+                "Task ID": f"{prefix}{seq:03d}",
+                "Assigned Record ID": rid,
+                "Digital Asset": normalize(asset.get("Digital Asset")),
+                "Box": normalize(asset.get("Box")),
+                "Source Group / Folder": normalize(asset.get("Source Group / Folder")),
+                "Template": normalize(rec.get("Template")),
+                "Type": normalize(rec.get("Type")),
+                "Action Needed": action,
+                "Task Scope": normalize(asset.get("Production Task Scope")),
+                "Expected Output Asset Count": normalize(asset.get("Expected Output Asset Count")),
+                "Task Status": "Open",
+                "QC Confidence": normalize(asset.get("QC Confidence")),
+                "Production Note": normalize(asset.get("Production Task Note")),
+                "Carried Forward From": "",
+            })
+            file_id = normalize(asset.get("Drive File ID"))
+            folder_id = normalize(asset.get("Source Folder ID"))
+            if file_id:
+                out[-1]["Drive File ID"] = file_id
+            if folder_id:
+                out[-1]["Source Folder ID"] = folder_id
     return out
 
 
@@ -395,7 +435,7 @@ def calculate_metrics(tables: Mapping[str, Sequence[Mapping[str, str]]]) -> Comm
     ready = tables.get("Ready for Metadata", [])
     tasks = tables.get("Production Queue", [])
 
-    source_assets = len({normalize(r.get("Digital Asset")) for r in asset_qc if normalize(r.get("Digital Asset"))})
+    source_assets = len({asset_identity(r) for r in asset_qc if asset_identity(r)})
     odyssey_records = len({normalize(r.get("Item ID")) for r in itemization if normalize(r.get("Item ID"))})
     metadata_references = len({normalize(r.get("Reference ID")) for r in refs if normalize(r.get("Reference ID"))})
     ready_records = len({normalize(r.get("Item ID")) for r in ready if normalize(r.get("Item ID"))})
@@ -406,7 +446,7 @@ def calculate_metrics(tables: Mapping[str, Sequence[Mapping[str, str]]]) -> Comm
     logical_components = sum(parse_int(r.get("Logical Component Count"), "Logical Component Count") for r in itemization)
     open_tasks = [r for r in tasks if normalize(r.get("Task Status")) == "Open"]
     production_tasks = len(open_tasks)
-    additional_imaging_tasks = sum(1 for r in open_tasks if normalize(r.get("Action Needed")) == "Additional Imaging")
+    additional_imaging_tasks = sum(1 for r in open_tasks if _additional_imaging(r.get("Action Needed")))
     crop_qc_tasks = production_tasks - additional_imaging_tasks
     return CommitMetrics(
         source_assets=source_assets,

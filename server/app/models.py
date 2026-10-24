@@ -82,6 +82,8 @@ class Source(StrictRow):
     folder_name: str
     path: str
     mime_type: str
+    content_hash: str = ''
+    duplicate_warning: str = ''
 
 class JobCreate(BaseModel):
     project: str

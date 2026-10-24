@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import date
 from dataclasses import asdict
-from client_reference.commit_engine import plan_commit, calculate_metrics, split_assets, CommitError
+from client_reference.commit_engine import plan_commit, calculate_metrics, split_assets, asset_identity, CommitError
 from app.vocabulary import unresolved_material_review
 
 DETAIL=('Asset QC','Itemization','Metadata References','Production Queue','Ready for Metadata')
@@ -13,6 +13,47 @@ def folder_summary_key(project, box, unit):
     return [('Project', project), ('Box', box), ('Processing Unit / Source Folder', unit)]
 KEYS={'Asset QC':'Digital Asset','Itemization':'Item ID','Metadata References':'Reference ID','Production Queue':'Task ID','Ready for Metadata':'Item ID'}
 METRICS={'Source Assets':'source_assets','Odyssey Metadata Records':'odyssey_records','Metadata Only References':'metadata_references','Ready Records':'ready_records','Blocked - Cropping/QC':'blocked_crop_qc','Blocked - Additional Imaging':'blocked_additional_imaging','Review Records':'review_records','Content-Linked Assets':'content_linked_assets','Logical Components':'logical_components','Production Tasks':'production_tasks','Crop/QC Tasks':'crop_qc_tasks','Additional Imaging Tasks':'additional_imaging_tasks'}
+BOX_METRICS=('Source Assets','Odyssey Metadata Records','Metadata Only References','Ready Records','Blocked - Cropping/QC','Blocked - Additional Imaging','Review Records','Content-Linked Assets','Logical Components','Production Tasks')
+
+def scoped_tables(tables, *, names=None, project='', box=''):
+    """Keep production rows for one batch, or for one box when names is omitted."""
+    selected = set(names) if names is not None else None
+
+    def project_box(row):
+        row_project = (row.get('Project') or '').strip()
+        row_box = (row.get('Box') or '').strip()
+        if project and row_project and row_project != project:
+            return False
+        if box and row_box and row_box != box:
+            return False
+        return True
+
+    def asset_ok(row):
+        if not project_box(row):
+            return False
+        return selected is None or (row.get('Digital Asset') or '') in selected
+
+    def record_ok(row):
+        if not project_box(row):
+            return False
+        if selected is None:
+            return True
+        return bool(set(split_assets(row.get('Digital Assets'))) & selected)
+
+    return {
+        'Asset QC': [row for row in tables.get('Asset QC', []) if asset_ok(row)],
+        'Production Queue': [row for row in tables.get('Production Queue', []) if asset_ok(row)],
+        'Itemization': [row for row in tables.get('Itemization', []) if record_ok(row)],
+        'Metadata References': [row for row in tables.get('Metadata References', []) if record_ok(row)],
+        'Ready for Metadata': [row for row in tables.get('Ready for Metadata', []) if record_ok(row)],
+    }
+
+def scoped_metrics(tables, **kwargs):
+    return calculate_metrics(scoped_tables(tables, **kwargs))
+
+def metric_fields(metrics, labels=None):
+    chosen = METRICS if labels is None else {label: METRICS[label] for label in labels}
+    return {label: str(getattr(metrics, attr)) for label, attr in chosen.items()}
 
 class CommitService:
     def __init__(self,sheets,diagnostics=None):
@@ -36,23 +77,47 @@ class CommitService:
     def _baseline(self,tables,assets,records):
         """Remove only this batch's already written creates for deterministic recovery."""
         names={a['Digital Asset'] for a in assets}
+        identities={asset_identity(a) for a in assets}
+        repeated={name for name in names if sum(a['Digital Asset']==name for a in assets)>1}
+        def retired(row):
+            if row.get('Drive File ID'):
+                return asset_identity(row) in identities
+            if row.get('Digital Asset') in repeated:
+                return False
+            return row.get('Digital Asset') in names
         ids={r['Proposed Record ID'] for r in records if r['Record Operation']=='Create New'}
         result={k:list(v) for k,v in tables.items()}
-        result['Asset QC']=[r for r in result['Asset QC'] if r['Digital Asset'] not in names]
-        result['Production Queue']=[r for r in result['Production Queue'] if r['Digital Asset'] not in names]
+        result['Asset QC']=[r for r in result['Asset QC'] if not retired(r)]
+        result['Production Queue']=[r for r in result['Production Queue'] if not retired(r)]
         for sheet,key in [('Itemization','Item ID'),('Metadata References','Reference ID'),('Ready for Metadata','Item ID')]:
             result[sheet]=[r for r in result[sheet] if r[key] not in ids]
         return result
     @staticmethod
     def same(actual,expected):
         return all(str(actual.get(k,''))==str(v) for k,v in expected.items())
+    def _write_key(self,sheet,row):
+        if sheet in ('Asset QC','Production Queue') and row.get('Drive File ID') and sheet=='Asset QC':
+            return [
+                ('Drive File ID', row.get('Drive File ID')),
+                ('Digital Asset', row.get('Digital Asset')),
+                ('Source Folder ID', row.get('Source Folder ID') or ''),
+            ]
+        key=KEYS[sheet]
+        return (key, row[key])
     def _upsert_expected(self,sid,sheet,row):
-        key=KEYS[sheet];found=[r for r in self.sheets.rows(sid,sheet) if r.get(key)==row[key]]
-        if len(found)>1:raise CommitError(f'Duplicate {sheet} key {row[key]}')
+        key=self._write_key(sheet,row)
+        rows=self.sheets.rows(sid,sheet)
+        if isinstance(key, list):
+            found=[r for r in rows if all(str(r.get(name))==str(value) for name,value in key)]
+            label='|'.join(str(value) for _,value in key)
+        else:
+            found=[r for r in rows if r.get(key[0])==row[key[0]]]
+            label=row[key[0]]
+        if len(found)>1:raise CommitError(f'Duplicate {sheet} key {label}')
         if found:
-            if not self.same(found[0],row):raise CommitError(f'Conflicting {sheet} row {row[key]}')
+            if not self.same(found[0],row):raise CommitError(f'Conflicting {sheet} row {label}')
             return False
-        self.sheets.write(sid,sheet,row);return True
+        self.sheets.write(sid,sheet,row,key);return True
     def _update_expected(self,sid,sheet,key,value,row):
         found=[r for r in self.sheets.rows(sid,sheet) if r.get(key)==value]
         if len(found)!=1:raise CommitError(f'Expected one {sheet} row: {value}')
@@ -98,14 +163,24 @@ class CommitService:
                 expected[sheet][matches[0]]=row
         manifest=queue.get('_manifest',[])
         names=[a['Digital Asset'] for a in assets]
-        qc=[r for r in current['Asset QC'] if r.get('Digital Asset') in names]
+        identified=bool(assets) and all(a.get('Drive File ID') for a in assets)
+        if identified:
+            staged_keys=[asset_identity(a) for a in assets]
+            source_keys=[asset_identity(x) for x in manifest]
+            qc=[r for r in current['Asset QC'] if asset_identity(r) in set(staged_keys)]
+            qc_keys=[asset_identity(r) for r in qc]
+        else:
+            staged_keys=names
+            source_keys=[x.get('name') for x in manifest]
+            qc=[r for r in current['Asset QC'] if r.get('Digital Asset') in set(names)]
+            qc_keys=[r.get('Digital Asset') for r in qc]
         checks={
-            '01 Source reconciliation':len(names)==len(manifest)==int(float(queue['Planned Asset Count'])) and set(names)=={x['name'] for x in manifest},
-            '02 Asset QC one per source':len(qc)==len(names) and Counter(r['Digital Asset'] for r in qc)==Counter(names),
-            '03 Duplicate prevention':len({r['Digital Asset'] for r in current['Asset QC']})==len(current['Asset QC']),
+            '01 Source reconciliation':len(names)==len(manifest)==int(float(queue['Planned Asset Count'])) and Counter(staged_keys)==Counter(source_keys),
+            '02 Asset QC one per source':len(qc)==len(names) and Counter(qc_keys)==Counter(staged_keys),
+            '03 Duplicate prevention':len({asset_identity(r) for r in current['Asset QC']})==len(current['Asset QC']),
             '04 Prior work protection':all(any(self.same(x,r) for x in current[sheet]) for sheet in DETAIL for r in before[sheet] if sheet not in ('Itemization','Ready for Metadata','Metadata References') or r.get(KEYS[sheet]) not in {x['Proposed Record ID'] for x in records}),
             '05 Scope and ZIP exclusion':all(x['name'].lower().endswith(('.jpg','.jpeg','.png','.tif','.tiff','.webp')) and not x['name'].lower().endswith('.zip') for x in manifest),
-            '06 Filename integrity':set(names)=={x['name'] for x in manifest},
+            '06 Filename integrity':Counter(names)==Counter(x.get('name') for x in manifest),
             '07 Itemization count integrity':all(len(split_assets(r['Digital Assets']))==int(float(r['Digital Asset Count'] or 0)) for r in current['Itemization']),
             '08 Odyssey reconciliation':self._equal(current['Itemization'],expected['Itemization'],'Item ID'),
             '09 Metadata reconciliation':self._equal(current['Metadata References'],expected['Metadata References'],'Reference ID'),
@@ -146,10 +221,18 @@ class CommitService:
                 continue
             if status and status not in ('Pending Commit', 'Pending'):
                 continue
+            if row.get('Drive File ID'):
+                staging_key = [
+                    ('Drive File ID', row.get('Drive File ID')),
+                    ('Digital Asset', row.get('Digital Asset')),
+                    ('Source Folder ID', row.get('Source Folder ID') or ''),
+                ]
+            else:
+                staging_key = ('Digital Asset', row.get('Digital Asset'))
             self.sheets.write(
                 sid, 'Asset Staging',
                 {'Commit Status': 'Committed - Validated', 'Commit Note': 'Committed - Validated'},
-                ('Digital Asset', row.get('Digital Asset')),
+                staging_key,
             )
         for row in self.sheets.rows(sid, 'Record Staging'):
             if row.get('Batch ID') != bid:
@@ -184,8 +267,11 @@ class CommitService:
 
     def _summaries(self,sid,q,plan,m,a):
         project=q['Project'];box=q['Box'];group=q['Source Group / Folder'];bid=q['Batch ID'];unit=a[0]['Processing Unit / Source Folder']
-        metrics={k:str(getattr(m,v)) for k,v in METRICS.items()}
-        self.sheets.write(sid,'Project Register',{'Project':project,'Processing Unit / Source Folder':unit,'Status':'Committed - Validated','Box':box,'Source Group / Folder':group,**metrics,'Open Item':plan.resulting_open_item,'Open Context':plan.resulting_open_item,'Committed Date':date.today().isoformat(),'Validation Result':'PASS','Notes':bid},('Notes',bid))
-        self.sheets.write(sid,'Box Summary',{'Box':box,'Box Status':'In Progress','Source Assets':metrics['Source Assets'],'Odyssey Metadata Records':metrics['Odyssey Metadata Records'],'Metadata Only References':metrics['Metadata Only References'],'Ready Records':metrics['Ready Records'],'Blocked - Cropping/QC':metrics['Blocked - Cropping/QC'],'Blocked - Additional Imaging':metrics['Blocked - Additional Imaging'],'Review Records':metrics['Review Records'],'Content-Linked Assets':metrics['Content-Linked Assets'],'Logical Components':metrics['Logical Components'],'Production Tasks':metrics['Production Tasks'],'Open Item':plan.resulting_open_item,'Open Context':bid},('Box',box))
+        tables=self.tables(sid)
+        names={row['Digital Asset'] for row in a}
+        batch_metrics=metric_fields(scoped_metrics(tables, names=names, project=project, box=box))
+        box_metrics=metric_fields(scoped_metrics(tables, project=project, box=box), BOX_METRICS)
+        self.sheets.write(sid,'Project Register',{'Project':project,'Processing Unit / Source Folder':unit,'Status':'Committed - Validated','Box':box,'Source Group / Folder':group,**batch_metrics,'Open Item':plan.resulting_open_item,'Open Context':plan.resulting_open_item,'Committed Date':date.today().isoformat(),'Validation Result':'PASS','Notes':bid},('Notes',bid))
+        self.sheets.write(sid,'Box Summary',{'Box':box,'Box Status':'In Progress',**box_metrics,'Open Item':plan.resulting_open_item,'Open Context':bid},('Box',box))
         self.sheets.write(sid,'Folder Processing Unit Summary',{'Project':project,'Processing Unit / Source Folder':unit,'Box':box,'Source Group / Folder':group,'Authorization Status':'Authorized','Processing Status':'In Progress','Enumerated New Source Count':str(len(a)),'Processed New Source Count':str(len(a)),'Asset QC Rows':str(len(a)),'Odyssey Metadata Records':str(plan.new_normal_record_count),'Metadata Only References':str(plan.new_reference_count),'Ready Records':str(plan.newly_ready_count),'Blocked Records':str(plan.blocked_record_count),'Production Tasks':str(plan.new_task_count),'Duplicate Exceptions':str(sum(bool(x.get('Exception / Duplicate Note')) for x in a)),'Open Item':plan.resulting_open_item,'Open Context':bid,'Validation Status':'PASS','Completed Date':date.today().isoformat(),'Notes':bid},folder_summary_key(project,box,unit))
         self._apply_continuation(sid,q,plan,m,a)

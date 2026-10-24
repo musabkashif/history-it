@@ -53,6 +53,7 @@ ACTIONS = frozenset({
     'Crop / Recrop + Create Derivative Crop',
     'Reshoot',
     'Additional Imaging Required',
+    'Rotate + Archival Border Crop',
     'Review',
 })
 
@@ -68,6 +69,7 @@ QUEUE_ACTIONS = frozenset({
     'Crop / Recrop + Create Derivative Crop',
     'Reshoot',
     'Additional Imaging Required',
+    'Rotate + Archival Border Crop',
 })
 
 # Pass: nothing to do. Reference Only: a metadata reference.
@@ -241,11 +243,89 @@ def _margin_only(note: str) -> bool:
     text = collapse(note).casefold()
     if not text:
         return False
+    if any(_affirmed(text, phrase) for phrase in (
+        'white physical border', 'integral physical border', 'attached note', 'attached-note', 'own dark edge',
+    )):
+        return False
     if _fails_archival_border(text) or any(word in text for word in (
         'cut off', 'clipped', 'split', 'spread', 'two pages', 'two-page', 'skewed', 'crooked',
     )):
         return False
+    if any(_affirmed(text, phrase) for phrase in (
+        'slight archival', 'compliant slight', 'a little over 75', 'somewhat above 75', 'little over 75',
+    )):
+        return True
     return any(word in text for word in ('border', 'margin', 'surround', 'background'))
+
+
+def _clearly_excessive_background(note: str) -> bool:
+    """Only an affirmed excess is a crop. A black border by itself is not."""
+    return any(_affirmed(note, phrase) for phrase in (
+        'clearly excessive', 'genuinely excessive', 'excessive capture background',
+        'excess capture background', 'excessive black background', 'excessive black capture',
+    ))
+
+
+def _integral_binding(note: str) -> bool:
+    return any(_affirmed(note, phrase) for phrase in (
+        'binding cord', 'staples', 'staple', 'rings', 'sewing', 'sewn binding',
+        'bound program', 'bound publication', 'integral binding',
+    ))
+
+
+def _unbound_publication(note: str) -> bool:
+    if _integral_binding(note):
+        return False
+    return any(_affirmed(note, phrase) for phrase in (
+        'unbound publication', 'unbound newsletter', 'unbound article',
+        'loose publication sheet', 'extant page edge',
+    ))
+
+
+_SAME_REPORT = (
+    'same chapter', 'same term', 'internal section heading', 'section heading',
+    'same report packet', 'consecutive report section', 'same chapter/term',
+)
+_TRUE_BOUNDARY = (
+    'true document boundary', 'physical document boundary', 'separate document',
+    'different report', 'new physical document', 'different physical document',
+)
+
+
+def _report_continuation(record, assets) -> bool:
+    blob = _record_blob(record, assets)
+    if any(_affirmed(blob, phrase) for phrase in _TRUE_BOUNDARY):
+        return False
+    if record.record_kind == 'Metadata Only':
+        return False
+    if record.type not in {'Report', ''} and 'report' not in blob:
+        return False
+    return any(_affirmed(blob, phrase) for phrase in _SAME_REPORT)
+
+
+def keep_report_packets(output):
+    """Keep consecutive sections of one chapter/term report on one record.
+
+    An internal section heading is not a boundary. A true physical document
+    boundary stays a separate record. This does not match filenames.
+    """
+    by_record = {}
+    for asset in output.assets:
+        by_record.setdefault(asset.assigned_record_id, []).append(asset)
+    kept = []
+    for record in output.records:
+        owned = by_record.get(record.proposed_record_id, [])
+        previous = kept[-1] if kept else None
+        if previous is not None and _report_continuation(record, owned):
+            previous_assets = by_record.get(previous.proposed_record_id, [])
+            if previous.record_kind != 'Metadata Only' and (previous.type in {'Report', ''} or 'report' in _record_blob(previous, previous_assets)):
+                for asset in owned:
+                    asset.assigned_record_id = previous.proposed_record_id
+                by_record.setdefault(previous.proposed_record_id, []).extend(owned)
+                continue
+        kept.append(record)
+    output.records = kept
+    return output
 
 
 def _is_photographic_print(note: str, record) -> bool:
@@ -318,7 +398,25 @@ def apply_authorized_rules(output):
             mounted = any(phrase in asset_blob for phrase in (
                 'mounted photograph', 'mounted photo', 'photograph mounted', 'tipped-in', 'pasted photograph', 'photo pasted',
             )) or (mounted_on_final and index == len(owned) - 1)
-            if mounted and asset.action_needed in {'Crop / Recrop', 'Publication Crop', 'Crop', 'No Adjustment', 'Archival Border Crop', ''}:
+            binding = _integral_binding(asset_blob)
+            unbound = _unbound_publication(asset_blob)
+            excessive = _clearly_excessive_background(asset_blob)
+            if binding and asset.action_needed == 'Publication Crop':
+                if excessive:
+                    asset.action_needed = 'Review'
+                    asset.required_crop_standard = 'N/A'
+                    _note(record, 'Held for review: a page-edge crop would sever integral binding.')
+                else:
+                    asset.action_needed = 'No Adjustment'
+                    asset.required_crop_standard = 'N/A'
+                    _note(record, 'Bound publication binding is preserved.')
+            elif unbound and asset.action_needed in {'No Adjustment', 'Publication Crop'}:
+                asset.action_needed = 'Publication Crop'
+                asset.required_crop_standard = 'Publication Page Edge'
+            elif asset.action_needed == 'No Adjustment' and excessive and not binding:
+                asset.action_needed = 'Archival Border Crop'
+                asset.required_crop_standard = 'Archival Border'
+            elif mounted and asset.action_needed in {'Crop / Recrop', 'Publication Crop', 'Crop', 'No Adjustment', 'Archival Border Crop', ''}:
                 asset.action_needed = 'Crop / Recrop + Create Derivative Crop'
                 if asset.required_crop_standard in {'', 'Page Edge', 'Publication Page Edge', 'Archival Border'}:
                     asset.required_crop_standard = 'Book Page Edge'
@@ -393,10 +491,13 @@ def unresolved_material_review(record) -> bool:
 def prepare_inspection_output(output):
     """Canonicalize approved words and hold unsupported decisions for review.
 
+    keep_report_packets runs first so a section heading is not a second record.
+
     Filename groups are not changed. A collection template or collection type
     cannot remain Metadata Only. An action outside the master action table
     becomes Review and does not create a task.
     """
+    keep_report_packets(output)
     for record in output.records:
         template = canonicalize(record.template, TEMPLATES | {'Metadata Only'})
         if template is not None and template != '':

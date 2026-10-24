@@ -121,6 +121,53 @@ def discovered_f_folders(sources):
     return sorted(labels, key=natural_f_key)
 
 
+def partition_immediate_folders(folders):
+    """Split immediate F folders into processable images and empty folders.
+
+    An empty folder is Skipped / Empty. The parent run fails only when every
+    eligible folder has no processable images. Inaccessible folders are not
+    represented here; the caller still refuses those.
+    """
+    ordered = sorted(folders, key=lambda item: natural_f_key(item.get('folder_name')))
+    sources = []
+    skipped = []
+    for item in ordered:
+        images = list(item.get('images') or [])
+        name = str(item.get('folder_name') or '')
+        if not images:
+            skipped.append({
+                'folder_id': str(item.get('folder_id') or ''),
+                'folder_name': name,
+                'event': 'Skipped / Empty',
+                'detail': f'Skipped / Empty: {name} contains no processable images.',
+            })
+            continue
+        sources.extend(sorted(images, key=lambda source: (getattr(source, 'path', ''), getattr(source, 'id', ''))))
+    if not sources:
+        names = ', '.join(item['folder_name'] for item in skipped) or 'authorized folder'
+        raise ValueError(f'No eligible source folder contains processable images. Skipped / Empty: {names}')
+    return sources, skipped
+
+
+def flag_probable_duplicates(sources):
+    """Warn when different Drive files share content. Do not fail the job."""
+    groups = defaultdict(list)
+    for source in sources:
+        digest = str(getattr(source, 'content_hash', '') or '').strip()
+        if digest:
+            groups[digest].append(source)
+    note = (
+        'Probable duplicate: another Drive file has identical content. '
+        'Both files remain independently addressable.'
+    )
+    for group in groups.values():
+        if len({source.id for source in group}) < 2:
+            continue
+        for source in group:
+            source.duplicate_warning = note
+    return sources
+
+
 def group_sources_by_folder(sources):
     """Group sources by Drive folder_id, preserving natural F-folder order."""
     folders = defaultdict(list)

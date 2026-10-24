@@ -104,6 +104,7 @@ QUEUE = frozenset({
     'publication crop', 'archival border crop', 'create derivative crop',
     'crop / recrop + create derivative crop', 'reshoot',
     'additional imaging required', 'additional imaging',
+    'rotate + archival border crop',
 })
 
 
@@ -148,6 +149,53 @@ def _prior_task_count(record_id, items):
     return 0
 
 
+def _preserve_committed_record(record, canon, items, refs):
+    """A close keeps the committed kind, template, and type.
+
+    The next folder having no continuation is not a reason to rewrite a Normal
+    Odyssey record as Metadata Only.
+    """
+    canon = (canon or '').strip()
+    if not canon:
+        return
+    item = next((row for row in items if (row.get('Item ID') or '').strip() == canon), None)
+    ref = next((row for row in refs if (row.get('Reference ID') or '').strip() == canon), None)
+    if item is not None:
+        record['Record Kind'] = 'Normal Odyssey'
+        record['Record Operation'] = 'Update Existing Open Record'
+        if (item.get('Template') or '').strip():
+            record['Template'] = item['Template']
+        if 'Type' in item:
+            record['Type'] = item.get('Type') or ''
+        allowed = {'Ready', 'Blocked - Cropping/QC', 'Blocked - Additional Imaging', 'Review'}
+        readiness = (record.get('Metadata Readiness') or '').strip()
+        preserved = (item.get('Metadata Readiness') or '').strip()
+        if readiness not in allowed:
+            record['Metadata Readiness'] = preserved if preserved in allowed else 'Ready'
+        return
+    if ref is not None:
+        record['Record Kind'] = 'Metadata Only'
+        record['Record Operation'] = 'Update Existing Open Record'
+        if (ref.get('Template') or '').strip():
+            record['Template'] = ref['Template']
+        if 'Type' in ref:
+            record['Type'] = ref.get('Type') or ''
+
+
+def _asset_labels(assets):
+    names = [asset.get('Digital Asset') or '' for asset in assets]
+    repeated = {name for name in names if name and names.count(name) > 1}
+    labels = []
+    for asset in assets:
+        name = asset.get('Digital Asset') or ''
+        file_id = (asset.get('Drive File ID') or '').strip()
+        if file_id and name in repeated:
+            labels.append(f'{name} [{file_id}]')
+        else:
+            labels.append(name)
+    return labels
+
+
 def assign_identity(batch, assets, records, items, refs, other_records, prior):
     """Replace model-local record keys with the register id pattern.
 
@@ -162,12 +210,17 @@ def assign_identity(batch, assets, records, items, refs, other_records, prior):
     prefix = prefix_for(batch.get('Project'), batch.get('Box'), known_ids)
     used = list(known_ids)
     local_to_canon = {}
+    records.sort(key=lambda row: 0 if (row.get('Record Operation') == 'Update Existing Open Record' or (prior and (row.get('Proposed Record ID') or '').strip() == prior)) else 1)
     for index, record in enumerate(records, 1):
         local = (record.get('Proposed Record ID') or '').strip()
         if not local:
             raise CommitError('Record Staging row is missing Proposed Record ID')
         if local in local_to_canon:
             raise CommitError(f'Duplicate staging key {local}')
+        operation = record.get('Record Operation')
+        if operation == 'Update Existing Open Record' or (prior and local == prior):
+            canon_hint = local if _known(local, items, refs) else prior
+            _preserve_committed_record(record, canon_hint, items, refs)
         kind = record.get('Record Kind')
         reference = kind == 'Metadata Only'
         operation = record.get('Record Operation')
@@ -213,7 +266,12 @@ def assign_identity(batch, assets, records, items, refs, other_records, prior):
             queued = sum(asset.get('Production Queue Eligible') == 'Yes' for asset in group)
             already = _prior_task_count(record['Proposed Record ID'], items) if record['Record Operation'] == 'Update Existing Open Record' else 0
             record['Production Task Count'] = str(already + queued)
-        new_names = [asset['Digital Asset'] for asset in group]
+        if record['Record Operation'] == 'Update Existing Open Record' and not group:
+            boundary = record.get('Boundary State After Record') or ''
+            if not boundary.strip() or boundary.startswith('Open'):
+                record['Boundary State After Record'] = 'Closed'
+        labels = _asset_labels(group)
+        new_names = labels
         old_names = _committed_assets(record['Proposed Record ID'], items, refs) if record['Record Operation'] == 'Update Existing Open Record' else []
         full = old_names + [name for name in new_names if name not in old_names]
         record['New Batch Assets'] = '; '.join(new_names)

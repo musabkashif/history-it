@@ -319,7 +319,7 @@ function App() {
                 />
               : view === 'control-job'
                 ? <ControlJobPage jobId={controlJobId} workspaceId={controlWorkspace} onOpenSheets={openJob} onBack={() => setView('jobs')} />
-                : <SettingsPage onOpenJob={openJob} currentJobId={job?.job_id || ''} />
+                : <SettingsPage />
 
   return (
     <AppShell

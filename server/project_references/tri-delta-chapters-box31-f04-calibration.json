@@ -1,6 +1,6 @@
 {
   "reference_id": "tri-delta-chapters-box31-f04-calibration",
-  "version": "2026-10-20.1",
+  "version": "2026-10-24.1",
   "material_class": "client-approved-calibration-example",
   "approval": "client-approved",
   "not_an_executable_rule": true,
@@ -8,7 +8,7 @@
   "box": "Chapters Box 31",
   "applies_to_folders": ["F04"],
   "scope_limit": "This example is project calibration for Tri Delta Chapters, Chapters Box 31, folder F04 only. It does not decide Box 19, other Box 31 folders, or other projects. It does not rewrite inspection output from filenames.",
-  "statement": "CLIENT-APPROVED CALIBRATION EXAMPLE for Tri Delta Chapters, Chapters Box 31, folder F04. The authority is the client's explicit correction for this pair. This is inspection guidance, not a filename rule and not an instruction to rewrite a model answer. Inspect every authorized image. Use the example only when the visual evidence agrees. If the images disagree, follow the images and explain the evidence. TriDelta_Year2_Chapters_Box31_F04_Photograph_009a.jpg, Photograph_009b.jpg, and Photograph_009c.jpg are a separate photographic print and remain Normal Odyssey collection material. Do not place that print on this reference, and do not turn the print into Metadata Only to match the example. A descriptive sheet that supports one specific item still stays with that item. This example does not change that general rule.",
+  "statement": "CLIENT-APPROVED CALIBRATION EXAMPLE for Tri Delta Chapters, Chapters Box 31, folder F04. The authority is the client's file-by-file review of this folder. This is inspection guidance for this folder only. It does not rewrite a model answer, and a mismatch stops the batch before commit. Inspect every authorized image. Preserve the complete physical item and any integral physical border or attached context, and remove excess capture background. Do not use a pixel count as the decision. Do not turn the folder into Metadata Only. F04_001 and F04_004-005 have no crop. F04_002-003, F04_006-007, and Photograph_008 through Photograph_021 are Archival Border Crops, except Photograph_016b which is rotated 180 degrees and then cropped. Photograph_017 keeps its attached note or attached context. Every Photograph_017 frame, including Photograph_017c, must preserve that attached note and record the exact phrase \"attached note\" in that frame's QC Note or Production Task Note. Photograph_019 keeps the photograph's white physical border. Every Photograph_019 frame, including Photograph_019b, must preserve that white physical border and record the exact phrase \"white physical border\" in that frame's QC Note or Production Task Note. Photograph_020 keeps the photograph's own dark edge and removes only excess capture background. Every Photograph_020 frame, including Photograph_020b, must preserve that dark edge and record the exact phrase \"dark edge\" in that frame's QC Note or Production Task Note. Do not invent those phrases from the filename. A frame that omits its required phrase stays blocked. TriDelta_Year2_Chapters_Box31_F04_Photograph_009a.jpg, Photograph_009b.jpg, and Photograph_009c.jpg remain Normal Odyssey collection material. Do not place that print on the descriptive reference, and do not turn the print into Metadata Only. A descriptive sheet that supports one specific item still stays with that item. This example does not change Box 19 or the general rules.",
   "examples": [
     {
       "example_id": "f04-descriptive-reference",
@@ -28,5 +28,27 @@
         "production_tasks": "none"
       }
     }
+  ],
+  "filename_rules": [
+    {"contains": "F04_001.jpg", "record_kind": "Metadata Only", "production_tasks": "none"},
+    {"contains": "F04_002.jpg", "record_kind": "Normal Odyssey", "action": "Archival Border Crop", "group": "f04-002-003"},
+    {"contains": "F04_003.jpg", "record_kind": "Normal Odyssey", "action": "Archival Border Crop", "group": "f04-002-003"},
+    {"contains": "F04_006.jpg", "record_kind": "Normal Odyssey", "action": "Archival Border Crop", "group": "f04-006-007"},
+    {"contains": "F04_007.jpg", "record_kind": "Normal Odyssey", "action": "Archival Border Crop", "group": "f04-006-007"},
+    {"contains": "_Photograph_008", "record_kind": "Normal Odyssey", "action": "Archival Border Crop"},
+    {"contains": "_Photograph_009", "record_kind": "Normal Odyssey", "action": "Archival Border Crop"},
+    {"contains": "_Photograph_010", "record_kind": "Normal Odyssey", "action": "Archival Border Crop"},
+    {"contains": "_Photograph_011", "record_kind": "Normal Odyssey", "action": "Archival Border Crop"},
+    {"contains": "_Photograph_012", "record_kind": "Normal Odyssey", "action": "Archival Border Crop"},
+    {"contains": "_Photograph_013", "record_kind": "Normal Odyssey", "action": "Archival Border Crop"},
+    {"contains": "_Photograph_014", "record_kind": "Normal Odyssey", "action": "Archival Border Crop"},
+    {"contains": "_Photograph_015", "record_kind": "Normal Odyssey", "action": "Archival Border Crop"},
+    {"contains": "_Photograph_016", "record_kind": "Normal Odyssey", "action": "Archival Border Crop"},
+    {"contains": "_Photograph_016b", "record_kind": "Normal Odyssey", "action": "Rotate + Archival Border Crop", "note_must_include": ["180"]},
+    {"contains": "_Photograph_017", "record_kind": "Normal Odyssey", "action": "Archival Border Crop", "note_must_include": ["attached note"]},
+    {"contains": "_Photograph_018", "record_kind": "Normal Odyssey", "action": "Archival Border Crop"},
+    {"contains": "_Photograph_019", "record_kind": "Normal Odyssey", "action": "Archival Border Crop", "note_must_include": ["white physical border"]},
+    {"contains": "_Photograph_020", "record_kind": "Normal Odyssey", "action": "Archival Border Crop", "note_must_include": ["dark edge"]},
+    {"contains": "_Photograph_021", "record_kind": "Normal Odyssey", "action": "Archival Border Crop"}
   ]
 }

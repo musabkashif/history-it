@@ -1,7 +1,8 @@
 from __future__ import annotations
 import hashlib,json,threading,time
-from collections import defaultdict
-from app.box_folders import group_sources_by_folder, select_authorized_sources
+from collections import Counter, defaultdict
+from app.adapters import SheetResizeError, sheet_resize_denied
+from app.box_folders import flag_probable_duplicates, group_sources_by_folder, select_authorized_sources
 from app.google_ids import ensure_drive_folder, ensure_spreadsheet
 from app.models import Source
 from app.commit import CommitService, folder_summary_key
@@ -15,7 +16,7 @@ from app.authorization import (
     authorized_manifest, initial_queue_prior,
 )
 from app.references import ReferenceError, order_records, reference_mismatches, references_dir, resolve_reference
-from client_reference.commit_engine import CommitError, split_assets, validate_staging
+from client_reference.commit_engine import CommitError, asset_identity, split_assets, validate_staging
 from app.deployment_admission import DeploymentHoldError, enter_admission, leave_admission
 
 TERMINAL={'Committed - Validated','Blocked - Human Review'}
@@ -65,14 +66,14 @@ class Orchestrator:
         # A new job is a clean project start. Do not list Drive until that check passes,
         # so a later folder is not enumerated by a second create call.
         initial_queue_prior(self._continuation(req.spreadsheet_id,'Open Intellectual Item'),self._continuation(req.spreadsheet_id,'Unresolved Boundary Item'),self.sheets.rows(req.spreadsheet_id,'Asset QC'),self.sheets.rows(req.spreadsheet_id,'Itemization'),self.sheets.rows(req.spreadsheet_id,'Metadata References'))
-        sources=select_authorized_sources(self.drive.enumerate(req.source_folder_id))
-        if not sources:raise ValueError('Authorized folder contains no images')
-        existing={r.get('Digital Asset') for r in self.sheets.rows(req.spreadsheet_id,'Asset QC')}
-        if existing & {s.name for s in sources}:raise ValueError('Authorized sources already exist in Asset QC')
+        sources,skipped=self._discover(req.source_folder_id)
+        if not sources:raise ValueError('No eligible source folder contains processable images')
+        self._reject_known_assets(self.sheets.rows(req.spreadsheet_id,'Asset QC'), sources)
         folders=dict(group_sources_by_folder(sources))
         requested=req.batch_size or self.settings.batch_size
         # Register is authoritative; the index only resolves opaque IDs to sheet IDs.
         self.sheets.write(self.settings.job_index_spreadsheet_id,'HistoryIT Jobs',{'Job ID':job,'Spreadsheet ID':req.spreadsheet_id,'Project':req.project,'Source Folder ID':req.source_folder_id},('Job ID',job))
+        self._record_skipped(req.spreadsheet_id,job,req.project,req.box,skipped)
         self._append_batches(req.spreadsheet_id,job,req.project,req.box,folders,requested,'None',0,req.source_folder_id)
         return self.state(job)
     def state(self,job):
@@ -149,30 +150,77 @@ class Orchestrator:
         if any(row.get('Batch Status')!='Committed - Validated' for row in rows):
             raise ValueError('Existing batches are not Committed - Validated. Refusing to enumerate or queue the next folder.')
         ensure_drive_folder(self.drive, req.source_folder_id)
-        sources=select_authorized_sources(self.drive.enumerate(req.source_folder_id))
-        if not sources:raise ValueError('Authorized folder contains no images')
+        sources,skipped=self._discover(req.source_folder_id)
+        if not sources:raise ValueError('No eligible source folder contains processable images')
         known_folders=set()
-        known=set()
+        known_ids=set()
         for row in rows:
-            known.update(self._manifest_names(row))
             for item in (json.loads(row.get('Notes') or '{}').get('manifest') or []):
                 if isinstance(item,dict) and item.get('folder_id'):
                     known_folders.add(item['folder_id'])
-        known.update(r.get('Digital Asset') for r in self.sheets.rows(sid,'Asset QC'))
-        new_sources=[s for s in sources if s.folder_id not in known_folders and s.name not in known]
+                if isinstance(item,dict) and item.get('id'):
+                    known_ids.add(item['id'])
+        for row in self.sheets.rows(sid,'Asset QC'):
+            if row.get('Drive File ID'):
+                known_ids.add(row['Drive File ID'])
+        new_sources=[s for s in sources if s.folder_id not in known_folders and s.id not in known_ids]
+        box=rows[-1].get('Box') or rows[0].get('Box') or ''
+        self._record_skipped(sid,job,rows[0]['Project'],box,skipped)
         if not new_sources:
             return self.state(job)
-        names=[s.name for s in new_sources]
-        overlap=sorted(set(names) & {n for n in known if n})
-        if overlap:raise ValueError('Authorized folder repeats filenames already on this job: '+', '.join(overlap[:5]))
-        if len(names)!=len(set(names)):raise ValueError('Authorized folder contains duplicate filenames')
+        ids=[s.id for s in new_sources]
+        if len(ids)!=len(set(ids)):raise ValueError('Duplicate Drive file ID in the authorized source set')
         folders=dict(group_sources_by_folder(new_sources))
         last=rows[-1]
         prior=str(last.get('Resulting Open Item') or '').strip() or 'None'
         start=max(int(row['Batch ID'].rsplit('-B',1)[-1]) for row in rows)
         requested=req.batch_size or self.settings.batch_size
-        self._append_batches(sid,job,rows[0]['Project'],last.get('Box') or rows[0].get('Box') or '',folders,requested,prior,start,req.source_folder_id)
+        self._append_batches(sid,job,rows[0]['Project'],box,folders,requested,prior,start,req.source_folder_id)
         return self.state(job)
+    def _discover(self, folder_id):
+        discover=getattr(self.drive, 'discover', None)
+        if discover is not None:
+            sources, skipped = discover(folder_id)
+        else:
+            sources, skipped = self.drive.enumerate(folder_id), []
+        sources=flag_probable_duplicates(select_authorized_sources(sources))
+        ids=[source.id for source in sources]
+        if len(ids)!=len(set(ids)):
+            raise ValueError('Duplicate Drive file ID in the authorized source set')
+        return sources, skipped
+    def _reject_known_assets(self, rows, sources):
+        known={asset_identity(row) for row in rows}
+        fresh=[asset_identity({'id':source.id,'name':source.name,'folder_id':source.folder_id,'Digital Asset':source.name}) for source in sources]
+        # A legacy Asset QC row is only the filename. Do not treat that filename as the new file's ID.
+        overlap=sorted(set(fresh) & known)
+        if overlap:
+            raise ValueError('Authorized sources already exist in Asset QC')
+    def _record_skipped(self, sid, job, project, box, skipped):
+        if not skipped:
+            return
+        self.sheets.ensure_tab(sid, 'Job Events', ['Event ID', 'Job ID', 'Event', 'Folder', 'Folder ID', 'Detail'])
+        for item in skipped:
+            event_id=f"{job}|skipped|{item.get('folder_id') or item.get('folder_name')}"
+            self.sheets.write(sid, 'Job Events', {
+                'Event ID': event_id,
+                'Job ID': job,
+                'Event': 'Skipped / Empty',
+                'Folder': item.get('folder_name') or '',
+                'Folder ID': item.get('folder_id') or '',
+                'Detail': item.get('detail') or 'Skipped / Empty',
+            }, ('Event ID', event_id))
+            folder=item.get('folder_name') or ''
+            self.sheets.write(sid, 'Folder Processing Unit Summary', {
+                'Project': project,
+                'Box': box,
+                'Processing Unit / Source Folder': folder,
+                'Source Group / Folder': folder,
+                'Authorization Status': 'Authorized',
+                'Processing Status': 'Skipped / Empty',
+                'Enumerated New Source Count': '0',
+                'Processed New Source Count': '0',
+                'Notes': item.get('detail') or 'Skipped / Empty',
+            }, folder_summary_key(project, box, folder))
     @staticmethod
     def _batch_root(row):
         try:payload=json.loads(row.get('Notes') or '{}')
@@ -296,6 +344,8 @@ class Orchestrator:
             matches=[r for r in self.sheets.rows(sid,'Batch Queue') if r['Batch ID']==bid]
             if matches:
                 r=matches[0]
+                if sheet_resize_denied(r.get('Error / Retry Note') or ''):
+                    raise SheetResizeError(r.get('Error / Retry Note') or 'Service account lacks permission to resize the worksheet. This failure is not retryable.')
                 if r['Batch Status'] not in ('Inspection Failed - Retryable','Commit Failed - Retryable','Blocked - Human Review'):
                     raise ValueError('Batch not retryable')
                 resumed = {'Batch Status':'Inspection Complete - Awaiting Commit' if self._complete(sid,r) else 'Authorized / Pending Inspection','Validation Status':'Not Run'}
@@ -307,7 +357,11 @@ class Orchestrator:
     def _complete(self,sid,b):
         rows=[r for r in self.sheets.rows(sid,'Asset Staging') if r['Batch ID']==b['Batch ID']]
         expected=json.loads(b['Notes'])['manifest']
-        return len(rows)==len(expected) and {r['Digital Asset'] for r in rows}=={s['name'] for s in expected} and all(r['Inspection Complete']=='Yes' for r in rows)
+        if rows and all(row.get('Drive File ID') for row in rows) and all(item.get('id') for item in expected):
+            same=Counter(asset_identity(row) for row in rows)==Counter(asset_identity(item) for item in expected)
+        else:
+            same=Counter(row.get('Digital Asset') for row in rows)==Counter(item.get('name') for item in expected)
+        return len(rows)==len(expected) and same and all(r['Inspection Complete']=='Yes' for r in rows)
     def _usage(self,sid,job):
         return [r for r in self.sheets.rows(sid,'OpenAI Usage') if r['Job ID']==job]
     def cost(self,sid,job):return sum(float(r.get('Estimated Cost USD') or 0) for r in self._usage(sid,job))
@@ -318,10 +372,18 @@ class Orchestrator:
         call_id=info.get('call_id') or f'{b["Batch ID"]}-A{attempt:02d}'
         self.sheets.write(sid,'OpenAI Usage',{'Call ID':call_id,'Project':b['Project'],'Job ID':job,'Batch ID':b['Batch ID'],'Model':s.openai_model,'Source Image Count':b['Planned Asset Count'],'Input Tokens':str(inp),'Cached Input Tokens':str(cached),'Output Tokens':str(out),'Estimated Cost USD':str(cost),'Attempt':str(attempt),'Elapsed Seconds':str(info.get('elapsed_seconds',0)),'Status':status or ('Success' if success else 'Failure'),'Cumulative Job Cost USD':str(total),'Response ID':info.get('response_id','')},('Call ID',call_id))
     def _stage(self,sid,b,output,prior='None'):
-        expected=[x['name'] for x in json.loads(b['Notes'])['manifest']]
+        manifest=json.loads(b['Notes'])['manifest']
+        expected=[x['name'] for x in manifest]
         assets=[a.model_dump(by_alias=True) for a in output.assets];records=[r.model_dump(by_alias=True) for r in output.records]
         if [a['Digital Asset'] for a in assets]!=expected:raise ValueError('Staging filename/order mismatch')
-        if len({a['Digital Asset'] for a in assets})!=len(assets):raise ValueError('Duplicate staging key')
+        for asset, item in zip(assets, manifest):
+            asset['Drive File ID']=item.get('id') or ''
+            asset['Source Folder ID']=item.get('folder_id') or ''
+            warning=item.get('duplicate_warning') or ''
+            note=asset.get('Exception / Duplicate Note') or ''
+            if warning and warning.casefold() not in note.casefold():
+                asset['Exception / Duplicate Note']=f'{note} {warning}'.strip()
+        if len({asset_identity(a) for a in assets})!=len(assets):raise ValueError('Duplicate staging key')
         items=self.sheets.rows(sid,'Itemization')
         refs=self.sheets.rows(sid,'Metadata References')
         others=[r for r in self.sheets.rows(sid,'Record Staging') if r.get('Batch ID')!=b['Batch ID']]
@@ -342,7 +404,13 @@ class Orchestrator:
     def _write_stage_row(self, sid, sheet, row, batch_id, key):
         # The production adapter supports composite matching. Small in-memory
         # test doubles from the client package only support a two-item key.
-        if sheet == 'Asset Staging':
+        if sheet == 'Asset Staging' and row.get('Drive File ID'):
+            identity = [
+                ('Drive File ID', row.get('Drive File ID')),
+                ('Digital Asset', row.get('Digital Asset')),
+                ('Source Folder ID', row.get('Source Folder ID') or ''),
+            ]
+        elif sheet == 'Asset Staging':
             identity = [('Digital Asset', row[key])]
         else:
             identity = [('Batch ID', batch_id), ('Proposed Record ID', row[key])]
@@ -350,11 +418,25 @@ class Orchestrator:
 
     def _drop_stale(self,sid,b,assets,records):
         names={a['Digital Asset'] for a in assets}
+        identities={asset_identity(a) for a in assets}
         ids={r['Proposed Record ID'] for r in records}
-        for sheet,key,keep in (('Asset Staging','Digital Asset',names),('Record Staging','Proposed Record ID',ids)):
-            for row in self.sheets.rows(sid,sheet):
-                if row.get('Batch ID')==b['Batch ID'] and row.get(key) not in keep:
-                    self.sheets.clear(sid,sheet,row.get('_row'),(key,row.get(key)))
+        for row in self.sheets.rows(sid,'Asset Staging'):
+            if row.get('Batch ID')!=b['Batch ID']:
+                continue
+            stale=asset_identity(row) not in identities if row.get('Drive File ID') or any(a.get('Drive File ID') for a in assets) else row.get('Digital Asset') not in names
+            if not stale:
+                continue
+            if row.get('Drive File ID'):
+                self.sheets.clear(sid,'Asset Staging',row.get('_row'),[
+                    ('Drive File ID', row.get('Drive File ID')),
+                    ('Digital Asset', row.get('Digital Asset')),
+                    ('Source Folder ID', row.get('Source Folder ID') or ''),
+                ])
+            else:
+                self.sheets.clear(sid,'Asset Staging',row.get('_row'),('Digital Asset', row.get('Digital Asset')))
+        for row in self.sheets.rows(sid,'Record Staging'):
+            if row.get('Batch ID')==b['Batch ID'] and row.get('Proposed Record ID') not in ids:
+                self.sheets.clear(sid,'Record Staging',row.get('_row'),('Proposed Record ID', row.get('Proposed Record ID')))
     def _require_commit_contract(self,sid,b,assets,records):
         queue=dict(b)
         queue['Batch Status']='Inspection Complete - Awaiting Commit'
@@ -507,7 +589,7 @@ class Orchestrator:
                     self._stage(sid,b,output,prior)
                     self._record_usage(sid,job,b,attempt,usage,True)
                     self.sheets.write(sid,'Batch Queue',{'Batch Status':'Inspection Complete - Awaiting Commit','Inspection Date':time.strftime('%Y-%m-%d')},('Batch ID',b['Batch ID']))
-                except (RegisterStateError,BatchAuthorizationError,ReferenceError) as exc:
+                except (RegisterStateError,BatchAuthorizationError,ReferenceError,SheetResizeError) as exc:
                     self._block(sid,b,exc,attempt);return
                 except CreditShortageError as exc:
                     diag=getattr(self.inspector,'diagnostics',None)
@@ -538,6 +620,8 @@ class Orchestrator:
                 b=next(r for r in self._queue(sid,job) if r['Batch ID']==b['Batch ID'])
                 self.committer.commit(sid,b)
                 self._authorize_following(sid,job,b['Batch ID'])
+            except SheetResizeError as exc:
+                self._block(sid,b,exc,int(float(b.get('Inspection Attempt') or 0)));return
             except Exception as exc:
                 latest=next(r for r in self._queue(sid,job) if r['Batch ID']==b['Batch ID'])
                 if latest['Batch Status']!='Blocked - Human Review':
@@ -616,5 +700,8 @@ class Orchestrator:
                         continue
                     unit=r.get('Processing Unit / Source Folder') or folder
                     self.sheets.write(sid,'Folder Processing Unit Summary',{'Processing Status':'Completed - Validated','Completed Date':time.strftime('%Y-%m-%d'),**counts},folder_summary_key(project, box, unit))
-        from app.register_state import reconcile_register
-        reconcile_register(self.sheets, sid, job, self._queue(sid, job))
+        from app.register_state import finalize_completed_box, reconcile_register
+        queue=self._queue(sid, job)
+        if queue:
+            finalize_completed_box(self.sheets, sid, queue[0].get('Project') or '', queue[0].get('Box') or '', queue)
+        reconcile_register(self.sheets, sid, job, queue)
