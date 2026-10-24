@@ -1,5 +1,6 @@
 from __future__ import annotations
 import hashlib,json,threading,time
+from decimal import Decimal
 from collections import Counter, defaultdict
 from app.adapters import SheetResizeError, sheet_resize_denied
 from app.box_folders import flag_probable_duplicates, group_sources_by_folder, select_authorized_sources
@@ -18,6 +19,10 @@ from app.authorization import (
 from app.references import ReferenceError, order_records, reference_mismatches, references_dir, resolve_reference
 from client_reference.commit_engine import CommitError, asset_identity, split_assets, validate_staging
 from app.deployment_admission import DeploymentHoldError, enter_admission, leave_admission
+from app.usage_accounting import (
+    ADDED_USAGE_COLUMNS, UsageAccountingError, annotate_usage, billed_cost, parse_provider_usage,
+    store_usage_row, usage_cost, usage_row, write_usage_outbox,
+)
 
 TERMINAL={'Committed - Validated','Blocked - Human Review'}
 
@@ -37,6 +42,7 @@ class Orchestrator:
         self.sheets=sheets;self.drive=drive;self.inspector=inspector;self.settings=settings
         self.committer=CommitService(sheets, getattr(inspector, 'diagnostics', None))
         self.threads={};self.lock=threading.RLock();self._pause_requested=set();self._deploy_hold=False;self._admission_depth=0
+        self._active_usage={}
     def _queue(self,sid,job):
         rows=[r for r in self.sheets.rows(sid,'Batch Queue') if r.get('Job ID')==job]
         for r in rows:
@@ -59,7 +65,7 @@ class Orchestrator:
         ensure_drive_folder(self.drive, req.source_folder_id)
         ensure_spreadsheet(self.sheets, req.spreadsheet_id)
         self.sheets.ensure_tab(self.settings.job_index_spreadsheet_id,'HistoryIT Jobs',['Job ID','Spreadsheet ID','Project','Source Folder ID'])
-        self.sheets.ensure_tab(req.spreadsheet_id,'OpenAI Usage',['Call ID','Project','Job ID','Batch ID','Model','Source Image Count','Input Tokens','Cached Input Tokens','Output Tokens','Estimated Cost USD','Attempt','Elapsed Seconds','Status','Cumulative Job Cost USD','Response ID'])
+        self.sheets.ensure_tab(req.spreadsheet_id,'OpenAI Usage',['Call ID','Project','Job ID','Batch ID','Model','Source Image Count','Input Tokens','Cached Input Tokens','Output Tokens','Estimated Cost USD','Attempt','Elapsed Seconds','Status','Cumulative Job Cost USD','Response ID',*ADDED_USAGE_COLUMNS])
         digest=hashlib.sha256((req.spreadsheet_id+'|'+req.source_folder_id+'|'+req.project).encode()).hexdigest()[:16]
         job='HIT-'+digest
         if any(r.get('Job ID')==job for r in self.sheets.rows(req.spreadsheet_id,'Batch Queue')):raise ValueError('Job already initialized; resume existing job')
@@ -364,13 +370,108 @@ class Orchestrator:
         return len(rows)==len(expected) and same and all(r['Inspection Complete']=='Yes' for r in rows)
     def _usage(self,sid,job):
         return [r for r in self.sheets.rows(sid,'OpenAI Usage') if r['Job ID']==job]
-    def cost(self,sid,job):return sum(float(r.get('Estimated Cost USD') or 0) for r in self._usage(sid,job))
+    def cost(self,sid,job):return float(billed_cost(self._usage(sid,job)))
+    def _bind_usage_recorder(self):
+        if hasattr(self.inspector,'usage_recorder'):
+            self.inspector.usage_recorder=self.record_provider_usage
+    def record_provider_usage(self,record):
+        """Store one provider response before validation, staging, or commit."""
+        active=self._active_usage.get(record.get('job_id'))
+        if not active:
+            raise UsageAccountingError('A provider response arrived without an open batch')
+        return self._persist_usage(active['sid'], active['batch'], record)
+    def _persist_returned_usage(self,sid,batch,attempt,usage):
+        if not usage or usage.get('usage_recorded'):
+            return
+        parts=usage.get('responses') or [usage]
+        for part in parts:
+            item=dict(part)
+            item.setdefault('attempt', attempt)
+            item.setdefault('part', 1)
+            if not str(item.get('response_id') or '').strip():
+                continue
+            self._persist_usage(sid, batch, item)
+    def _persist_usage(self,sid,batch,info):
+        attempt=int(info.get('attempt') or 0)
+        record=parse_provider_usage(
+            info,
+            response_id=str(info.get('response_id') or ''),
+            attempt=attempt,
+            part=int(info.get('part') or 1),
+            status=str(info.get('status') or 'Received'),
+            failure_reason=str(info.get('failure_reason') or ''),
+        )
+        pricing_error=None
+        try:
+            cost='' if record.get('usage_identity_gap') else usage_cost(record, self.settings)
+        except UsageAccountingError as exc:
+            cost=''
+            pricing_error=exc
+            record=dict(record)
+            record['status']='Usage Accounting Failed'
+            record['failure_reason']=str(exc)
+        total=str(billed_cost(self._usage(sid, batch['Job ID'])) + (Decimal(0) if cost == '' else Decimal(cost)))
+        row=usage_row(
+            record,
+            project=batch.get('Project') or '',
+            job=batch.get('Job ID') or '',
+            batch=batch.get('Batch ID') or '',
+            model=getattr(self.settings, 'openai_model', '') or '',
+            source_count=batch.get('Planned Asset Count') or '',
+            elapsed=info.get('elapsed_seconds', 0),
+            cost=cost,
+            cumulative=total,
+        )
+        try:
+            store_usage_row(self.sheets, sid, record, row)
+        except Exception as exc:
+            path=write_usage_outbox(getattr(self.settings, 'diagnostics_dir', None) or './logs', record, exc)
+            if isinstance(exc, UsageAccountingError):
+                raise UsageAccountingError(f'{exc} Outbox: {path}') from exc
+            raise UsageAccountingError(f'OpenAI usage was not written to the register. Outbox: {path}') from exc
+        if pricing_error is not None:
+            raise pricing_error
+        if record.get('usage_identity_gap'):
+            raise UsageAccountingError(record['usage_identity_gap'])
+        return {'estimated_cost_usd': cost}
+    def _accounting_failure(self,sid,batch,exc):
+        self.sheets.write(sid,'Batch Queue',{'Batch Status':'Inspection Failed - Retryable','Error / Retry Note':str(exc)[:300]},('Batch ID',batch['Batch ID']))
+    def _annotate_responses(self,sid,usage,status,reason):
+        if not usage:
+            return
+        parts=usage.get('responses') or [usage]
+        for part in parts:
+            response_id=str(part.get('response_id') or '').strip()
+            if not response_id or ',' in response_id:
+                continue
+            annotate_usage(self.sheets, sid, response_id, status, reason)
+    def _record_unbilled(self,sid,job,batch,attempt,status,reason):
+        """A provider attempt that returned no usage. Token cells stay empty."""
+        call_id=f'unbilled:{batch.get("Batch ID")}:A{int(attempt)}:{status}'
+        row={
+            'Call ID':call_id,'Project':batch.get('Project') or '','Job ID':job,'Batch ID':batch.get('Batch ID') or '',
+            'Model':getattr(self.settings,'openai_model','') or '','Source Image Count':batch.get('Planned Asset Count') or '',
+            'Estimated Cost USD':'','Attempt':str(attempt),'Part':'','Elapsed Seconds':'','Status':status,
+            'Failure Reason':str(reason or '')[:300],'Billed':'No','Cumulative Job Cost USD':str(self.cost(sid,job)),
+            'Response ID':'',
+        }
+        ensure=getattr(self.sheets,'ensure_columns',None)
+        if callable(ensure):
+            ensure(sid,'OpenAI Usage',list(ADDED_USAGE_COLUMNS))
+        existing=[item for item in self.sheets.rows(sid,'OpenAI Usage') if str(item.get('Call ID') or '')==call_id]
+        if existing:
+            return
+        self.sheets.write(sid,'OpenAI Usage',row,('Call ID',call_id))
     def _record_usage(self,sid,job,b,attempt,info,success,status=None):
-        cached=int(info.get('cached_input_tokens',0));inp=int(info.get('input_tokens',0));out=int(info.get('output_tokens',0))
-        s=self.settings;cost=((inp-cached)*s.openai_input_usd_per_million+cached*s.openai_cached_input_usd_per_million+out*s.openai_output_usd_per_million)/1e6
-        total=self.cost(sid,job)+cost
-        call_id=info.get('call_id') or f'{b["Batch ID"]}-A{attempt:02d}'
-        self.sheets.write(sid,'OpenAI Usage',{'Call ID':call_id,'Project':b['Project'],'Job ID':job,'Batch ID':b['Batch ID'],'Model':s.openai_model,'Source Image Count':b['Planned Asset Count'],'Input Tokens':str(inp),'Cached Input Tokens':str(cached),'Output Tokens':str(out),'Estimated Cost USD':str(cost),'Attempt':str(attempt),'Elapsed Seconds':str(info.get('elapsed_seconds',0)),'Status':status or ('Success' if success else 'Failure'),'Cumulative Job Cost USD':str(total),'Response ID':info.get('response_id','')},('Call ID',call_id))
+        response_id=str((info or {}).get('response_id') or '').strip()
+        if not response_id:
+            if status=='Blocked - OpenAI Credits':
+                self._record_unbilled(sid,job,b,attempt,status,status)
+            return
+        item=dict(info or {})
+        item['attempt']=attempt
+        item['status']=status or ('Success' if success else 'Failure')
+        self._persist_usage(sid,b,item)
     def _stage(self,sid,b,output,prior='None'):
         manifest=json.loads(b['Notes'])['manifest']
         expected=[x['name'] for x in manifest]
@@ -533,8 +634,9 @@ class Orchestrator:
 
         Does not require frontend polling. Stops only for pause, blocked review, inaccessible
         required material surfaced as errors, spending limit, retry exhaustion, or validation
-        failure. Ordinary Cropping/QC production tasks on committed records do not halt the box.
+        failure.         Ordinary Cropping/QC production tasks on committed records do not halt the box.
         """
+        self._bind_usage_recorder()
         sid,rows=self._job(job)
         try:assert_single_active_batch(rows)
         except BatchAuthorizationError as exc:
@@ -543,6 +645,7 @@ class Orchestrator:
                     self._block(sid,row,exc,0)
             return
         for b in rows:
+            usage={}
             b=next(r for r in self._queue(sid,job) if r['Batch ID']==b['Batch ID'])
             status=b['Batch Status']
             if status=='Committed - Validated':
@@ -580,16 +683,28 @@ class Orchestrator:
                     answer_problems=reference_mismatches([],[],reference,[source.name for source in sources])
                     if answer_problems:
                         raise ReferenceError(answer_problems[0])
-                    output,usage=self.inspector.inspect(job,b['Batch ID'],sources,context,rules)
+                    self._active_usage[job]={'sid':sid,'batch':b}
+                    try:
+                        output,usage=self.inspector.inspect(job,b['Batch ID'],sources,context,rules)
+                    finally:
+                        self._active_usage.pop(job,None)
+                    self._persist_returned_usage(sid,b,attempt,usage)
                     output=apply_governing_constraints(output)
                     problems=reference_mismatches(output.assets,output.records,reference,[source.name for source in sources])
                     if problems:
                         raise ReferenceError('Staging was not changed. Calibration conflict: '+'; '.join(problems))
                     if reference:output.records=order_records(output.records,output.assets,reference)
                     self._stage(sid,b,output,prior)
-                    self._record_usage(sid,job,b,attempt,usage,True)
+                    self._annotate_responses(sid,usage,'Success','')
                     self.sheets.write(sid,'Batch Queue',{'Batch Status':'Inspection Complete - Awaiting Commit','Inspection Date':time.strftime('%Y-%m-%d')},('Batch ID',b['Batch ID']))
+                except UsageAccountingError as exc:
+                    self._accounting_failure(sid,b,exc);return
                 except (RegisterStateError,BatchAuthorizationError,ReferenceError,SheetResizeError) as exc:
+                    label='Blocked - Calibration' if isinstance(exc,ReferenceError) else 'Blocked - Sheets'
+                    try:
+                        self._annotate_responses(sid,usage,label,str(exc))
+                    except UsageAccountingError as accounting:
+                        self._accounting_failure(sid,b,accounting);return
                     self._block(sid,b,exc,attempt);return
                 except CreditShortageError as exc:
                     diag=getattr(self.inspector,'diagnostics',None)
@@ -597,19 +712,23 @@ class Orchestrator:
                         try:diag.write(job,b['Batch ID'],attempt,'credit_shortage',error=str(exc),error_chain=exception_chain(exc),success=False)
                         except Exception:pass
                     self.sheets.write(sid,'Batch Queue',{'Batch Status':'Blocked - Human Review','Inspection Attempt':str(max(attempt-1,0)),'Error / Retry Note':credit_alert(job)},('Batch ID',b['Batch ID']))
-                    try:
-                        self._record_usage(sid,job,b,attempt,{'elapsed_seconds':getattr(exc,'elapsed_seconds',0),'call_id':f'{b["Batch ID"]}-CREDIT-{time.time_ns()}'},False,'Blocked - OpenAI Credits')
-                    except Exception:
-                        pass
+                    self._record_unbilled(sid,job,b,attempt,'Blocked - OpenAI Credits',str(exc))
                     return
                 except Exception as exc:
                     # Ambiguous failure: a complete readback is eligible for commit on resume.
                     info=dict(getattr(exc, 'inspection_usage', {}) or usage)
                     info.setdefault('elapsed_seconds',getattr(exc,'elapsed_seconds',0))
-                    try:
-                        self._record_usage(sid,job,b,attempt,info,False)
-                    except Exception:
-                        pass
+                    info.setdefault('attempt',attempt)
+                    if str(info.get('response_id') or '').strip() and not info.get('usage_recorded'):
+                        try:
+                            self._persist_usage(sid,b,info)
+                        except UsageAccountingError as accounting:
+                            self._accounting_failure(sid,b,accounting);return
+                    if str(info.get('response_id') or '').strip() and ',' not in str(info.get('response_id')):
+                        try:
+                            self._annotate_responses(sid,{'responses':[info]},'Validation Failed',str(exc))
+                        except UsageAccountingError as accounting:
+                            self._accounting_failure(sid,b,accounting);return
                     note=str(exc)
                     path=getattr(exc, 'diagnostics_path', '')
                     if path:note=f'{note[:180]} [Diagnostic: {path}]'
@@ -621,6 +740,11 @@ class Orchestrator:
                 self.committer.commit(sid,b)
                 self._authorize_following(sid,job,b['Batch ID'])
             except SheetResizeError as exc:
+                if usage:
+                    try:
+                        self._annotate_responses(sid,usage,'Blocked - Sheets',str(exc))
+                    except UsageAccountingError as accounting:
+                        self._accounting_failure(sid,b,accounting);return
                 self._block(sid,b,exc,int(float(b.get('Inspection Attempt') or 0)));return
             except Exception as exc:
                 latest=next(r for r in self._queue(sid,job) if r['Batch ID']==b['Batch ID'])

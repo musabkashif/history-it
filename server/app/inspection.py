@@ -131,14 +131,18 @@ def merge_usage(parts):
     combined = {
         'input_tokens': 0,
         'cached_input_tokens': 0,
+        'cache_write_30m_tokens': 0,
+        'cache_write_12h_tokens': 0,
         'output_tokens': 0,
         'elapsed_seconds': 0,
         'estimated_cost_usd': 0,
         'response_id': '',
+        'responses': list(parts),
+        'usage_recorded': bool(parts) and all(part.get('usage_recorded') for part in parts),
     }
     ids = []
     for part in parts:
-        for key in ('input_tokens', 'cached_input_tokens', 'output_tokens'):
+        for key in ('input_tokens', 'cached_input_tokens', 'cache_write_30m_tokens', 'cache_write_12h_tokens', 'output_tokens'):
             combined[key] += int(part.get(key) or 0)
         combined['elapsed_seconds'] += float(part.get('elapsed_seconds') or 0)
         combined['estimated_cost_usd'] += float(part.get('estimated_cost_usd') or 0)
@@ -147,6 +151,17 @@ def merge_usage(parts):
     combined['elapsed_seconds'] = round(combined['elapsed_seconds'], 2)
     combined['response_id'] = ','.join(ids)
     return combined
+
+
+def _next_part(context) -> int:
+    if not isinstance(context, dict):
+        return 1
+    holder = context.get('_usage_parts')
+    if not isinstance(holder, dict):
+        holder = {'n': 0}
+        context['_usage_parts'] = holder
+    holder['n'] += 1
+    return holder['n']
 
 
 def inspect_resilient(inspect_once, sources, context, on_split=None):
@@ -198,12 +213,6 @@ def _docx_text(path):
             parts.append(f'Table {index}\n' + '\n'.join(rows))
     return '\n'.join(parts)
 
-def _estimate_cost(settings, inp, cached, out):
-    in_rate = float(getattr(settings, 'openai_input_usd_per_million', 0) or 0)
-    cached_rate = float(getattr(settings, 'openai_cached_input_usd_per_million', 0) or 0)
-    out_rate = float(getattr(settings, 'openai_output_usd_per_million', 0) or 0)
-    return ((inp - cached) * in_rate + cached * cached_rate + out * out_rate) / 1e6
-
 class Inspector:
     def __init__(self, settings, drive, client=None):
         self.settings = settings
@@ -213,6 +222,7 @@ class Inspector:
             from openai import OpenAI
             client = OpenAI(api_key=settings.openai_api_key, max_retries=0, timeout=getattr(settings, 'openai_timeout_seconds', 900))
         self.client = client
+        self.usage_recorder = None
         self._sleep = time.sleep
 
     def _call(self, job, batch, attempt, operation, func):
@@ -221,13 +231,22 @@ class Inspector:
             try:
                 return func()
             except Exception as exc:
-                if not _is_connection_error(exc) or try_index == CONNECTION_ATTEMPTS:
+                if not _is_connection_error(exc):
                     raise
+                if try_index != CONNECTION_ATTEMPTS:
+                    self.diagnostics.write(
+                        job, batch, attempt, 'connection_retry',
+                        operation=operation, try_index=try_index, attempts=CONNECTION_ATTEMPTS,
+                        error_type=type(exc).__name__, error=str(exc), error_chain=exception_chain(exc),
+                    )
+                # The provider did not return usage for this try. Do not invent token counts.
                 self.diagnostics.write(
-                    job, batch, attempt, 'connection_retry',
+                    job, batch, attempt, 'usage_unbilled',
                     operation=operation, try_index=try_index, attempts=CONNECTION_ATTEMPTS,
-                    error_type=type(exc).__name__, error=str(exc), error_chain=exception_chain(exc),
+                    billed=False, failure_reason=str(exc)[:300], error_type=type(exc).__name__,
                 )
+                if try_index == CONNECTION_ATTEMPTS:
+                    raise
                 self._sleep(delay)
                 delay = min(delay * 2, 16)
 
@@ -426,30 +445,34 @@ class Inspector:
             if effort:
                 request['reasoning'] = {'effort': effort}
             response = self._call(job, batch, attempt, 'responses.parse', lambda: self.client.responses.parse(**request))
-            usage = getattr(response, 'usage', None)
-            details = getattr(usage, 'input_tokens_details', None)
-            response_meta = {
-                'response_id': getattr(response, 'id', ''),
-                'status': getattr(response, 'status', ''),
-                'incomplete_details': getattr(response, 'incomplete_details', None),
-                'input_tokens': getattr(usage, 'input_tokens', 0) if usage else 0,
-                'cached_input_tokens': getattr(details, 'cached_tokens', 0) if details else 0,
-                'output_tokens': getattr(usage, 'output_tokens', 0) if usage else 0,
-            }
-            response_meta['estimated_cost_usd'] = _estimate_cost(
-                self.settings,
-                int(response_meta['input_tokens'] or 0),
-                int(response_meta['cached_input_tokens'] or 0),
-                int(response_meta['output_tokens'] or 0),
+            from app.usage_accounting import parse_provider_usage
+            part = _next_part(context if isinstance(context, dict) else {})
+            response_meta = parse_provider_usage(
+                getattr(response, 'usage', None),
+                response_id=getattr(response, 'id', '') or '',
+                attempt=attempt,
+                part=part,
+                status='Received',
             )
+            response_meta['provider_status'] = getattr(response, 'status', '')
+            response_meta['incomplete_details'] = getattr(response, 'incomplete_details', None)
+            response_meta['job_id'] = job
+            response_meta['batch_id'] = batch
+            response_meta['elapsed_seconds'] = round(time.monotonic() - start, 2)
             output = response.output_parsed
-            returned_assets = [a.digital_asset for a in output.assets] if output else []
-            returned_records = [r.proposed_record_id for r in output.records] if output else []
             self.diagnostics.write(
-                job, batch, attempt, 'response_received', **response_meta,
-                returned_asset_filenames=returned_assets,
-                returned_record_ids=returned_records,
+                job, batch, attempt, 'response_received', **{
+                    key: value for key, value in response_meta.items()
+                    if key not in {'incomplete_details', 'attempt'}
+                },
+                returned_asset_filenames=[a.digital_asset for a in output.assets] if output else [],
+                returned_record_ids=[r.proposed_record_id for r in output.records] if output else [],
             )
+            if self.usage_recorder is not None:
+                stored = self.usage_recorder(response_meta)
+                response_meta['usage_recorded'] = True
+                if isinstance(stored, dict) and stored.get('estimated_cost_usd') not in (None, ''):
+                    response_meta['estimated_cost_usd'] = stored['estimated_cost_usd']
             if output is None:
                 raise ValueError('Missing structured output')
             expected = [s.name for s in sources]
@@ -477,35 +500,41 @@ class Inspector:
                     linked_record_ids=sorted(linked), returned_record_ids=sorted(proposed),
                 )
                 raise ValueError('Every inspected asset must link to a returned Record Staging row')
-            elapsed = round(time.monotonic() - start, 2)
+            elapsed = response_meta['elapsed_seconds']
             self.diagnostics.write(
                 job, batch, attempt, 'inspection_validated',
                 elapsed_seconds=elapsed,
                 success=True,
                 image_preparation=modes,
-                estimated_cost_usd=response_meta['estimated_cost_usd'],
+                estimated_cost_usd=response_meta.get('estimated_cost_usd', 0),
                 response_id=response_meta['response_id'],
             )
             usage_out = {
-                'input_tokens': response_meta['input_tokens'],
-                'cached_input_tokens': response_meta['cached_input_tokens'] or 0,
-                'output_tokens': response_meta['output_tokens'],
-                'elapsed_seconds': elapsed,
-                'response_id': response_meta['response_id'],
-                'estimated_cost_usd': response_meta['estimated_cost_usd'],
+                key: response_meta.get(key)
+                for key in (
+                    'input_tokens', 'uncached_input_tokens', 'cached_input_tokens',
+                    'cache_write_30m_tokens', 'cache_write_12h_tokens', 'output_tokens',
+                    'response_id', 'attempt', 'part', 'status', 'failure_reason',
+                    'usage_identity_gap', 'billed', 'usage_recorded', 'estimated_cost_usd',
+                )
             }
+            usage_out['elapsed_seconds'] = elapsed
+            usage_out['responses'] = [{key: value for key, value in usage_out.items() if key != 'responses'}]
             return output, usage_out
         except Exception as e:
             setattr(e, 'elapsed_seconds', round(time.monotonic() - start, 2))
             if response_meta:
-                setattr(e, 'inspection_usage', {
-                    'input_tokens': response_meta.get('input_tokens') or 0,
-                    'cached_input_tokens': response_meta.get('cached_input_tokens') or 0,
-                    'output_tokens': response_meta.get('output_tokens') or 0,
-                    'response_id': response_meta.get('response_id') or '',
-                    'elapsed_seconds': getattr(e, 'elapsed_seconds', 0),
-                    'estimated_cost_usd': response_meta.get('estimated_cost_usd') or 0,
-                })
+                carried = {
+                    key: response_meta.get(key)
+                    for key in (
+                        'input_tokens', 'uncached_input_tokens', 'cached_input_tokens',
+                        'cache_write_30m_tokens', 'cache_write_12h_tokens', 'output_tokens',
+                        'response_id', 'attempt', 'part', 'status', 'failure_reason',
+                        'usage_identity_gap', 'billed', 'usage_recorded', 'estimated_cost_usd',
+                    )
+                }
+                carried['elapsed_seconds'] = getattr(e, 'elapsed_seconds', 0)
+                setattr(e, 'inspection_usage', carried)
             try:
                 path = self.diagnostics.write(
                     job, batch, attempt, 'inspection_error',

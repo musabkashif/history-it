@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     openai_input_usd_per_million: float = Field(default=0, ge=0)
     openai_cached_input_usd_per_million: float = Field(default=0, ge=0)
     openai_output_usd_per_million: float = Field(default=0, ge=0)
+    # Cache-write tokens are not ordinary input. A zero rate refuses to price
+    # them rather than substituting the input rate. 30-minute is the API default.
+    openai_cache_write_30m_usd_per_million: float = Field(default=0, ge=0)
+    openai_cache_write_12h_usd_per_million: float = Field(default=0, ge=0)
     # Optional server-only token for trusted service clients. Empty disables token auth
     # (never opens the API). Browser clients must use cookie sessions.
     api_token: str = ''
