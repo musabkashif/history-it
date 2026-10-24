@@ -21,7 +21,7 @@ from client_reference.commit_engine import CommitError, asset_identity, split_as
 from app.deployment_admission import DeploymentHoldError, enter_admission, leave_admission
 from app.usage_accounting import (
     ADDED_USAGE_COLUMNS, UsageAccountingError, annotate_usage, billed_cost, parse_provider_usage,
-    store_usage_row, usage_cost, usage_row, write_usage_outbox,
+    record_live_usage, store_usage_row, usage_cost, usage_row, write_usage_outbox,
 )
 
 TERMINAL={'Committed - Validated','Blocked - Human Review'}
@@ -406,10 +406,11 @@ class Orchestrator:
             cost='' if record.get('usage_identity_gap') else usage_cost(record, self.settings)
         except UsageAccountingError as exc:
             cost=''
-            pricing_error=exc
             record=dict(record)
-            record['status']='Usage Accounting Failed'
             record['failure_reason']=str(exc)
+            if 'cannot estimate' not in str(exc) and 'cost is unknown' not in str(exc):
+                pricing_error=exc
+                record['status']='Usage Accounting Failed'
         total=str(billed_cost(self._usage(sid, batch['Job ID'])) + (Decimal(0) if cost == '' else Decimal(cost)))
         row=usage_row(
             record,
@@ -429,11 +430,12 @@ class Orchestrator:
             if isinstance(exc, UsageAccountingError):
                 raise UsageAccountingError(f'{exc} Outbox: {path}') from exc
             raise UsageAccountingError(f'OpenAI usage was not written to the register. Outbox: {path}') from exc
+        record_live_usage(self.settings, record, batch, cost)
         if pricing_error is not None:
             raise pricing_error
         if record.get('usage_identity_gap'):
             raise UsageAccountingError(record['usage_identity_gap'])
-        return {'estimated_cost_usd': cost}
+        return {'estimated_cost_usd': cost, 'cost_basis': 'application estimate' if cost else 'unknown'}
     def _accounting_failure(self,sid,batch,exc):
         self.sheets.write(sid,'Batch Queue',{'Batch Status':'Inspection Failed - Retryable','Error / Retry Note':str(exc)[:300]},('Batch ID',batch['Batch ID']))
     def _annotate_responses(self,sid,usage,status,reason):

@@ -30,6 +30,32 @@ export interface Batch {
 }
 export interface UsageRow { 'Call ID'?: string; 'Batch ID'?: string; Model?: string; 'Source Image Count'?: string | number; 'Input Tokens'?: string | number; 'Cached Input Tokens'?: string | number; 'Output Tokens'?: string | number; 'Estimated Cost USD'?: string | number; Attempt?: string | number; 'Elapsed Seconds'?: string | number; Status?: string; [key: string]: unknown }
 export interface UsageResponse { job_id: string; usage: UsageRow[]; total_cost_usd?: number; alert?: string | null }
+export interface UsageTotals {
+  proven_cost_usd: string | null
+  unknown_event_count: number
+  request_count: number
+  cache_write_tokens: number | null
+  cache_read_tokens: number | null
+  cache_write_known_tokens: number | null
+  cache_read_known_tokens: number | null
+  cache_write_unknown_count: number
+  cache_read_unknown_count: number
+}
+export interface UsageSummaryGroup extends UsageTotals {
+  workspace_id?: string | null
+  project_name?: string | null
+  job_id?: string | null
+}
+export interface UsageSummaryResponse {
+  state: string
+  warning?: string | null
+  inspection_started?: boolean
+  sheets_written?: boolean
+  summary: UsageTotals
+  by_workspace: UsageSummaryGroup[]
+  by_project: UsageSummaryGroup[]
+  by_job: UsageSummaryGroup[]
+}
 export interface BatchesResponse { job_id: string; batches: Batch[]; alert?: string | null }
 export interface ValidationResponse { job_id: string; validation: Record<string, unknown>[] }
 export interface CheckpointResponse { outcome: string; matches: boolean; final_box19_match?: boolean; counts?: { actual?: Record<string, number>; expected?: Record<string, number>; differences?: Record<string, unknown> }; checks?: Record<string, boolean>; [key: string]: unknown }

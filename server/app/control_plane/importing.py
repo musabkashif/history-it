@@ -480,8 +480,10 @@ def read_register(sheets, spreadsheet_id: str, job_id: str, index_id: str | None
             warnings.append('Job index could not be read. Missing values were left unknown.')
 
     usage_rows = []
+    usage_detail_rows = []
     try:
         for row in sheets.rows(spreadsheet_id, 'OpenAI Usage') or []:
+            usage_detail_rows.append(dict(row))
             identifier = response_id(row.get('Response ID'))
             batch_id = clean(row.get('Batch ID'))
             if identifier and batch_id:
@@ -500,6 +502,7 @@ def read_register(sheets, spreadsheet_id: str, job_id: str, index_id: str | None
         'run_context': context or {},
         'job_index': index_row or {},
         'usage_rows': usage_rows,
+        'usage_detail_rows': usage_detail_rows,
         'warnings': warnings,
         'register_id': spreadsheet_id,
     }

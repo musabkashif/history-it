@@ -3,6 +3,7 @@ import React from 'react'
 import type { Batch, JobState, UsageResponse } from '../lib/types'
 import { displayJobStatus, jobIsRunning } from '../lib/types'
 import { Button, EmptyState, SectionHeader, StatCard, StatusBadge } from '../components/ui'
+import { UsageSummaryPanel } from '../components/UsageSummary'
 
 export function Overview({
   job, batches, usage, onNavigate, onRefresh, loading, lastRefreshAt, refreshError, developerVerification,
@@ -20,7 +21,9 @@ export function Overview({
   const committed = batches.filter(b => /Committed - Validated/i.test(String(b['Batch Status']))).length
   const totalAssets = batches.reduce((sum, b) => sum + Number(b['Planned Asset Count'] || 0), 0)
   const failed = batches.filter(b => /Failed|Blocked/i.test(String(b['Batch Status']))).length
-  const cost = usage?.total_cost_usd ?? usage?.usage.reduce((s, r) => s + Number(r['Estimated Cost USD'] || 0), 0) ?? 0
+  const recorded = usage?.total_cost_usd
+  const recordedAmount = recorded == null || recorded === '' ? null : Number(recorded)
+  const costLabel = recordedAmount == null || !Number.isFinite(recordedAmount) ? 'Unknown' : `$${recordedAmount.toFixed(2)}`
   const statusLabel = job ? displayJobStatus(job) : ''
   const discovered = job?.discovered_folders?.length ? job.discovered_folders : []
   const discoveredHint = discovered.length
@@ -39,8 +42,9 @@ export function Overview({
         <StatCard label="Job status" value={job ? <StatusBadge status={statusLabel} /> : 'Not connected'} hint={job ? job.job_id : 'Create or open a job'} icon={<ShieldCheck className="h-5 w-5" />} tone="cyan" />
         <StatCard label="Batches committed" value={`${committed}/${batches.length || 0}`} hint={failed ? `${failed} needs attention` : 'Validated readback'} icon={<CheckCircle2 className="h-5 w-5" />} tone="violet" />
         <StatCard label="Manifest assets" value={totalAssets || '—'} hint="Authorized source images" icon={<Image className="h-5 w-5" />} tone="amber" />
-        <StatCard label="Recorded usage" value={cost ? `$${cost.toFixed(2)}` : '—'} hint="Estimated OpenAI cost" icon={<WalletCards className="h-5 w-5" />} tone="rose" />
+        <StatCard label="Recorded usage" value={costLabel} hint="Register estimate. Billing reconciliation is pending." icon={<WalletCards className="h-5 w-5" />} tone="rose" />
       </div>
+      {job && <div className="mt-6"><UsageSummaryPanel jobId={job.job_id} title="Usage events for this job" /></div>}
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.4fr_.8fr]">
         <div className="surface p-6">
           <div className="flex items-start justify-between gap-4">

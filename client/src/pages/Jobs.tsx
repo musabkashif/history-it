@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
-import type { ControlJob, ControlJobFilters } from '../lib/types'
+import type { ControlJob, ControlJobFilters, UsageSummaryResponse } from '../lib/types'
+import { provenCostLabel, usageSummaryLine } from '../lib/usageSummary'
 import { controlMessage, controlView, shown, sourceLabel } from '../lib/controlPlaneState'
 import { Alert, Button, EmptyState, SectionHeader, StatusBadge } from '../components/ui'
 
@@ -27,6 +28,7 @@ export function JobsPage({
   const [disabled, setDisabled] = useState(false)
   const [warning, setWarning] = useState<string | null>(null)
   const [rows, setRows] = useState<ControlJob[]>([])
+  const [usage, setUsage] = useState<UsageSummaryResponse | null>(null)
   const [filters, setFilters] = useState<ControlJobFilters>({ workspace_id: workspaceId || '' })
   const [importForm, setImportForm] = useState({ job_id: '', register_url: '', register_file_reference: '', source: 'historical' as 'historical' | 'imported', deployed_release: '' })
   const [importError, setImportError] = useState('')
@@ -40,19 +42,23 @@ export function JobsPage({
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    api.controlJobs(filters).then(data => {
+    Promise.all([
+      api.controlJobs(filters),
+      api.controlUsageSummary({ workspace_id: workspaceId, project: projectName || undefined }).catch(() => null),
+    ]).then(([data, usageSummary]) => {
       if (cancelled) return
       setRows(data.jobs || [])
       setDisabled(data.state === 'disabled')
       setOffline(data.state === 'offline')
       setFailed(data.state === 'error')
       setWarning(data.warning || null)
+      setUsage(usageSummary)
     }).catch(() => {
       if (cancelled) return
       setFailed(true)
     }).finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [filters, reloadKey])
+  }, [filters, reloadKey, projectName, workspaceId])
 
   const sheetsJobMatches = Boolean(
     sheetsJob?.job_id
@@ -97,7 +103,7 @@ export function JobsPage({
       <SectionHeader
         eyebrow="Project"
         title={projectName || 'Project'}
-        description="Jobs for this project only. A live job opens the current Sheets workflow. A historical job stays read-only."
+        description="Jobs for this project only. A live job opens the current Sheets workflow. A historical job stays read-only. Missing usage-event cost stays unknown."
         actions={(
           <>
             <Button tone="ghost" onClick={onBack}>All projects</Button>
@@ -120,6 +126,8 @@ export function JobsPage({
         <input className="input" type="date" aria-label="Created from" value={filters.created_from || ''} onChange={event => setFilters(current => ({ ...current, created_from: event.target.value }))} />
         <input className="input" type="date" aria-label="Created to" value={filters.created_to || ''} onChange={event => setFilters(current => ({ ...current, created_to: event.target.value }))} />
       </div>
+      {usage?.state === 'ready' && <p className="mb-4 text-sm text-slate-200">{projectName || 'Workspace'} total: {usageSummaryLine(usage.summary)}</p>}
+      {usage?.state === 'disabled' && <p className="mb-4 text-xs text-slate-400">Usage events are off. Google Sheets remains the register.</p>}
       {view !== 'ready' && view !== 'empty' && (
         <Alert kind={view === 'error' ? 'danger' : 'warning'} title="Control plane">{warning || controlMessage(view)}</Alert>
       )}
@@ -148,6 +156,7 @@ export function JobsPage({
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Source</th>
                 <th className="px-4 py-3">Updated</th>
+                <th className="px-4 py-3">Calculated estimate</th>
               </tr>
             </thead>
             <tbody>
@@ -159,6 +168,7 @@ export function JobsPage({
                   <td className="px-4 py-3"><StatusBadge status={row.job_status || 'unknown'} /></td>
                   <td className="px-4 py-3 text-slate-300">{sourceLabel(row.source)}</td>
                   <td className="px-4 py-3 text-xs text-slate-400">{shown(row.updated_at)}</td>
+                  <td className="px-4 py-3 text-slate-200">{usage?.state === 'ready' ? provenCostLabel(usage.by_job.find(item => item.job_id === row.job_id)) : 'Unknown'}</td>
                 </tr>
               ))}
             </tbody>

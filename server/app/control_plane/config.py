@@ -75,6 +75,7 @@ def flags_enabled(settings) -> bool:
         settings.database_control_plane_enabled
         or settings.database_shadow_writes_enabled
         or settings.database_backfill_enabled
+        or getattr(settings, 'database_usage_ingestion_enabled', False)
     )
 
 

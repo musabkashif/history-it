@@ -263,3 +263,36 @@ class ImportPlan(BaseModel):
         if self.inspection_started:
             raise ValueError('Import cannot start inspection.')
         return self
+
+
+class UsageEventRecord(BaseModel):
+    """One provider response. Missing historical categories stay null."""
+
+    model_config = ConfigDict(extra='forbid')
+    response_id: str
+    workspace_id: str | None = None
+    project_name: str | None = None
+    job_id: str | None = None
+    batch_id: str | None = None
+    attempt: int | None = None
+    part: int | None = None
+    model: str | None = None
+    status: str | None = None
+    source: Literal['historical', 'live'] = 'historical'
+    input_tokens: int | None = None
+    uncached_input_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    cache_write_30m_tokens: int | None = None
+    cache_write_12h_tokens: int | None = None
+    cache_write_24h_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    cache_write_retention: str | None = None
+    output_tokens: int | None = None
+    calculated_cost_usd: str | None = None
+    cost_basis: Literal['application estimate', 'unknown'] | None = None
+    register_estimate_usd: str | None = None
+    recorded_estimate_usd: str | None = None
+    cost_state: Literal['proven', 'unknown']
+    billed: bool | None = None
+    request_count: int = 1
+    observed_at: str | None = None

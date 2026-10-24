@@ -33,11 +33,20 @@ class PricingTests(unittest.TestCase):
             input_tokens_details={'cached_tokens': 0, 'cache_write_tokens': 1_000_000},
         )
         self.assertEqual(record['uncached_input_tokens'], 0)
-        self.assertEqual(record['cache_write_30m_tokens'], 1_000_000)
-        self.assertEqual(record['cache_write_12h_tokens'], 0)
-        self.assertEqual(usage_cost(record, Rates()), '5.000000')
+        self.assertEqual(record['cache_write_tokens'], 1_000_000)
+        self.assertEqual(record['cache_write_30m_tokens'], '')
+        self.assertEqual(record['cache_write_retention'], 'unknown')
+        with self.assertRaisesRegex(Exception, 'retention was not returned'):
+            usage_cost(record, Rates())
+        named = _record(
+            input_tokens=1_000_000,
+            output_tokens=0,
+            input_tokens_details={'cached_tokens': 0, 'cache_write_30m_tokens': 1_000_000},
+        )
+        self.assertEqual(named['cache_write_30m_tokens'], 1_000_000)
+        self.assertEqual(usage_cost(named, Rates()), '5.000000')
         ordinary = (Decimal(1_000_000) * Decimal(4)) / Decimal(1_000_000)
-        self.assertNotEqual(Decimal(usage_cost(record, Rates())), ordinary)
+        self.assertNotEqual(Decimal(usage_cost(named, Rates())), ordinary)
 
     def test_exact_cost_uses_each_category_rate(self):
         record = _record(
@@ -57,7 +66,7 @@ class PricingTests(unittest.TestCase):
         class Missing(Rates):
             openai_cache_write_30m_usd_per_million = 0
 
-        record = _record(input_tokens=100, output_tokens=1, input_tokens_details={'cached_tokens': 0, 'cache_write_tokens': 100})
+        record = _record(input_tokens=100, output_tokens=1, input_tokens_details={'cached_tokens': 0, 'cache_write_30m_tokens': 100})
         with self.assertRaisesRegex(Exception, 'OPENAI_CACHE_WRITE_30M_USD_PER_MILLION'):
             usage_cost(record, Missing())
 
@@ -169,9 +178,12 @@ class OrchestratorUsageTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['Response ID'], 'resp-calibration')
         self.assertEqual(rows[0]['Call ID'], 'response:resp-calibration')
-        self.assertEqual(rows[0]['Cache Write 30m Tokens'], '1000000')
+        self.assertEqual(rows[0]['Cache Write Tokens'], '1000000')
+        self.assertEqual(rows[0]['Cache Write 30m Tokens'], '')
+        self.assertEqual(rows[0]['Cache Write Retention'], 'unknown')
         self.assertEqual(rows[0]['Uncached Input Tokens'], '0')
-        self.assertEqual(rows[0]['Estimated Cost USD'], '5.000000')
+        self.assertEqual(rows[0]['Estimated Cost USD'], '')
+        self.assertEqual(rows[0]['Cost Basis'], 'unknown')
         self.assertEqual(rows[0]['Status'], 'Blocked - Calibration')
         self.assertEqual(self.sheets.rows('register', 'Batch Queue')[0]['Batch Status'], 'Blocked - Human Review')
         self.assertEqual(self.calls, ['HIT-1-B0001'])
@@ -332,7 +344,9 @@ class InspectorUsageTests(unittest.TestCase):
         self.assertEqual([item.digital_asset for item in output.assets], ['a.jpg', 'b.jpg'])
         self.assertEqual([item['response_id'] for item in recorded], ['resp-a.jpg', 'resp-b.jpg'])
         self.assertEqual([item['part'] for item in recorded], [1, 2])
-        self.assertEqual(recorded[0]['cache_write_30m_tokens'], 900)
+        self.assertEqual(recorded[0]['cache_write_tokens'], 900)
+        self.assertEqual(recorded[0]['cache_write_30m_tokens'], '')
+        self.assertEqual(recorded[0]['cache_write_retention'], 'unknown')
         self.assertEqual(recorded[0]['cached_input_tokens'], 100)
         self.assertEqual(recorded[0]['uncached_input_tokens'], 0)
         self.assertEqual(usage['usage_recorded'], True)
@@ -379,7 +393,7 @@ class InspectorUsageTests(unittest.TestCase):
 class ReconciliationTests(unittest.TestCase):
     def test_saved_diagnostics_match_register_rows_and_cost(self):
         record = parse_provider_usage(
-            {'input_tokens': 1000, 'output_tokens': 50, 'input_tokens_details': {'cached_tokens': 100, 'cache_write_tokens': 900}},
+            {'input_tokens': 1000, 'output_tokens': 50, 'input_tokens_details': {'cached_tokens': 100, 'cache_write_30m_tokens': 900, 'cache_write_12h_tokens': 0}},
             response_id='resp-1', attempt=2, part=1, status='Received',
         )
         cost = usage_cost(record, Rates())

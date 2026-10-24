@@ -653,6 +653,18 @@ class ControlService:
             return None
         return events[-1].get('event_type')
 
+    def import_usage_observations(self, register_rows: list[dict], diagnostics: list[dict], rates: dict) -> dict:
+        """Store historical usage events. Does not write Sheets or start inspection."""
+        from app.control_plane.usage_events import apply_usage_plan, plan_usage_import
+
+        plan = plan_usage_import(register_rows, diagnostics, rates=rates)
+        return apply_usage_plan(self.store, plan)
+
+    def usage_summary(self, **filters) -> dict:
+        from app.control_plane.usage_events import summarize
+
+        return summarize(self.store.list_usage_events(**filters))
+
     @staticmethod
     def _require_live(job: dict, action: str) -> None:
         if job.get('source') != 'live':

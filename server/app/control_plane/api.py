@@ -27,6 +27,7 @@ from app.control_plane.identity import workspace_id_for
 from app.control_plane.importing import operator_note_extract, plan_from_extract, read_register
 from app.control_plane.models import JobSource
 from app.control_plane.runtime import get_store, health_fields
+from app.control_plane.usage_events import empty_totals, rates_from_settings
 from app.control_plane.service import ControlService
 from app.google_ids import GoogleIdError, parse_spreadsheet_id
 
@@ -61,6 +62,14 @@ class ManualImportRequest(BaseModel):
         if self.deployed_release and not _FILE_REF.fullmatch(self.deployed_release):
             raise ValueError('Release must be a short label.')
         return self
+
+
+class UsageImportRequest(BaseModel):
+    """Rows already read from a register or a diagnostic file. Nothing here contacts Google."""
+
+    model_config = ConfigDict(extra='forbid')
+    register_rows: list[dict] = Field(default_factory=list)
+    diagnostics: list[dict] = Field(default_factory=list)
 
 
 class BackfillRequest(BaseModel):
@@ -404,7 +413,77 @@ def build_router(settings, guard, sheets_provider):
                 extract['deployed_release'] = body.deployed_release
                 extract['warnings'] = list(loaded.get('warnings') or []) + warnings
         plan = plan_from_extract(extract, source=JobSource(body.source), job_id=body.job_id)
-        return service().import_record(plan, actor=who, correlation_id=correlation_id or f'import:{body.job_id}:{register_id or body.register_file_reference}')
+        detail = service().import_record(plan, actor=who, correlation_id=correlation_id or f'import:{body.job_id}:{register_id or body.register_file_reference}')
+        detail['usage_import'] = service().import_usage_observations(
+            list(extract.get('usage_detail_rows') or []),
+            [],
+            rates_from_settings(settings),
+        )
+        detail['inspection_started'] = False
+        detail['sheets_written'] = False
+        return detail
+
+    def _usage_filters(workspace_id, project, job_id, model, status, observed_from, observed_to):
+        for label, value in (('observed_from', observed_from), ('observed_to', observed_to)):
+            if value and not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+                raise HTTPException(400, f'{label} must be YYYY-MM-DD.')
+        return {
+            'workspace_id': workspace_id or None,
+            'project_name': project or None,
+            'job_id': job_id or None,
+            'model': model or None,
+            'status': status or None,
+            'observed_from': observed_from or None,
+            'observed_to': observed_to or None,
+        }
+
+    @router.get('/usage/summary')
+    def usage_summary(
+        request: Request,
+        workspace_id: str | None = None,
+        project: str | None = None,
+        job_id: str | None = None,
+        model: str | None = None,
+        status: str | None = None,
+        observed_from: str | None = None,
+        observed_to: str | None = None,
+        x_api_token: str | None = Header(default=None),
+    ):
+        """Derived usage totals. Missing historical cost stays null."""
+        guard(request, x_api_token)
+        filters = _usage_filters(workspace_id, project, job_id, model, status, observed_from, observed_to)
+        if not enabled():
+            return {
+                'state': 'disabled',
+                'warning': DISABLED,
+                'inspection_started': False,
+                'sheets_written': False,
+                'summary': empty_totals(),
+                'by_workspace': [],
+                'by_project': [],
+                'by_job': [],
+            }
+        data = call(lambda: service().usage_summary(**filters))
+        return {
+            'state': 'ready',
+            'warning': None,
+            'inspection_started': False,
+            'sheets_written': False,
+            **data,
+        }
+
+    @router.post('/usage/import')
+    def usage_import(body: UsageImportRequest, request: Request, x_api_token: str | None = Header(default=None)):
+        """Import usage rows the caller already read. Requires backfill and does not write Sheets."""
+        guard(request, x_api_token, mutating=True)
+        _require_import()
+        result = call(lambda: service().import_usage_observations(
+            body.register_rows,
+            body.diagnostics,
+            rates_from_settings(settings),
+        ))
+        result['state'] = 'ready'
+        return result
 
     def _read(spreadsheet_id: str, job_id: str):
         try:

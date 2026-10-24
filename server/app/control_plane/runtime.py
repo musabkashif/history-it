@@ -110,6 +110,7 @@ def health_fields(settings) -> dict:
         'database_control_plane_enabled': bool(settings.database_control_plane_enabled),
         'database_shadow_writes_enabled': bool(settings.database_shadow_writes_enabled),
         'database_backfill_enabled': bool(settings.database_backfill_enabled),
+        'database_usage_ingestion_enabled': bool(getattr(settings, 'database_usage_ingestion_enabled', False)),
         'database_message': message,
     }
 

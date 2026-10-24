@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Batch, JobState, UsageResponse, ValidationResponse } from '../lib/types'
 import { displayJobStatus, jobIsRunning, jobIsStartable } from '../lib/types'
 import { Button, Badge, EmptyState, SectionHeader, StatCard, StatusBadge, Alert, statusTone } from '../components/ui'
+import { UsageSummaryPanel } from '../components/UsageSummary'
 
 export function JobPage({
   job, batches, usage, validation, loading, error, refreshError, lastRefreshAt, actionLoading,
@@ -129,7 +130,7 @@ export function JobPage({
       )}
       {tab === 'batches' && <BatchTable batches={batches} onRetry={(id) => act(id, () => onRetry(id))} busy={busy} />}
       {tab === 'evidence' && <ValidationPanel validation={validation} />}
-      {tab === 'usage' && <UsagePanel usage={usage} />}
+      {tab === 'usage' && <UsagePanel usage={usage} jobId={job?.job_id} />}
       {authorizeOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
           <form onSubmit={submitFolder} className="surface w-full max-w-lg p-6">
@@ -365,12 +366,13 @@ function ValidationPanel({ validation }: { validation: ValidationResponse | null
   )
 }
 
-function UsagePanel({ usage }: { usage: UsageResponse | null }) {
+function UsagePanel({ usage, jobId }: { usage: UsageResponse | null; jobId?: string }) {
   const rows = usage?.usage || []
   return (
-    <div className="mt-6">
-      <div className="mb-4 grid gap-4 sm:grid-cols-3">
-        <StatCard label="Total cost" value={usage?.total_cost_usd != null ? `$${Number(usage.total_cost_usd).toFixed(2)}` : '—'} icon={<BarChart3 className="h-5 w-5" />} tone="rose" />
+    <div className="mt-6 space-y-6">
+      <UsageSummaryPanel jobId={jobId} title="Usage events for this job" />
+      <div className="grid gap-4 sm:grid-cols-3">
+        <StatCard label="Register estimate" value={usage?.total_cost_usd != null && usage.total_cost_usd !== '' ? `$${Number(usage.total_cost_usd).toFixed(2)}` : 'Unknown'} hint="Google Sheets OpenAI Usage. Billing reconciliation is pending." icon={<BarChart3 className="h-5 w-5" />} tone="rose" />
         <StatCard label="Inspection calls" value={rows.length || '—'} icon={<TerminalSquare className="h-5 w-5" />} tone="cyan" />
         <StatCard label="Images inspected" value={rows.reduce((n, r) => n + Number(r['Source Image Count'] || 0), 0) || '—'} icon={<Gauge className="h-5 w-5" />} tone="violet" />
       </div>

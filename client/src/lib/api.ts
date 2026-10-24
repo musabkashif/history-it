@@ -1,4 +1,4 @@
-import type { BatchesResponse, CheckpointResponse, CompareResponse, ControlImportRequest, ControlJobDetail, ControlJobFilters, ControlListResponse, ControlWorkspace, ControlJob, Health, JobForm, JobState, UsageResponse, ValidationResponse } from './types'
+import type { BatchesResponse, CheckpointResponse, CompareResponse, ControlImportRequest, ControlJobDetail, ControlJobFilters, ControlListResponse, ControlWorkspace, ControlJob, Health, JobForm, JobState, UsageResponse, UsageSummaryResponse, ValidationResponse } from './types'
 
 export const config = {
   baseUrl: (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, ''),
@@ -105,4 +105,12 @@ export const api = {
   controlResume: (id: string, workspace_id?: string) => request<ControlJobDetail>(`/api/control/jobs/${encodeURIComponent(id)}/resume`, { method: 'POST', body: JSON.stringify({ workspace_id: workspace_id || undefined }) }),
   controlPause: (id: string, workspace_id?: string) => request<ControlJobDetail>(`/api/control/jobs/${encodeURIComponent(id)}/pause`, { method: 'POST', body: JSON.stringify({ workspace_id: workspace_id || undefined }) }),
   controlImport: (body: ControlImportRequest) => request<ControlJobDetail>('/api/control/import', { method: 'POST', body: JSON.stringify(body) }),
+  controlUsageSummary: (filters: { workspace_id?: string; project?: string; job_id?: string; model?: string; status?: string; observed_from?: string; observed_to?: string } = {}) => {
+    const query = new URLSearchParams()
+    for (const [key, value] of Object.entries(filters)) {
+      if (value) query.set(key, value)
+    }
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return request<UsageSummaryResponse>(`/api/control/usage/summary${suffix}`)
+  },
 }

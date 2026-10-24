@@ -22,6 +22,12 @@ INDEX_SPECS = (
     {'collection': 'checkpoints', 'keys': [('job_id', 1), ('checkpoint_version', 1)], 'unique': True, 'name': 'uniq_job_checkpoint_version'},
     {'collection': 'checkpoints', 'keys': [('job_id', 1), ('created_at', 1)], 'unique': False, 'name': 'checkpoint_job_time'},
     {'collection': 'register_snapshots', 'keys': [('job_id', 1), ('captured_at', 1)], 'unique': False, 'name': 'snapshot_job_time'},
+    {'collection': 'usage_events', 'keys': [('response_id', 1)], 'unique': True, 'name': 'uniq_usage_response_id'},
+    {'collection': 'usage_events', 'keys': [('workspace_id', 1), ('project_name', 1)], 'unique': False, 'name': 'usage_workspace_project'},
+    {'collection': 'usage_events', 'keys': [('job_id', 1)], 'unique': False, 'name': 'usage_job_id'},
+    {'collection': 'usage_events', 'keys': [('observed_at', 1)], 'unique': False, 'name': 'usage_observed_at'},
+    {'collection': 'usage_events', 'keys': [('model', 1)], 'unique': False, 'name': 'usage_model'},
+    {'collection': 'usage_events', 'keys': [('status', 1)], 'unique': False, 'name': 'usage_status'},
 )
 
 

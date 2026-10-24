@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { FolderOpen } from 'lucide-react'
 import { api } from '../lib/api'
-import type { ControlWorkspace } from '../lib/types'
+import type { ControlWorkspace, UsageSummaryGroup } from '../lib/types'
+import { usageSummaryLine } from '../lib/usageSummary'
 import { controlMessage, controlView, shown } from '../lib/controlPlaneState'
 import { Alert, Button, EmptyState, SectionHeader } from '../components/ui'
 
@@ -13,6 +14,8 @@ export function ProjectsPage({ onOpenProject }: { onOpenProject: (workspace: Con
   const [warning, setWarning] = useState<string | null>(null)
   const [rows, setRows] = useState<ControlWorkspace[]>([])
   const [counts, setCounts] = useState<Record<string, number>>({})
+  const [usageState, setUsageState] = useState('loading')
+  const [usageByWorkspace, setUsageByWorkspace] = useState<Record<string, UsageSummaryGroup>>({})
   const [reloadKey, setReloadKey] = useState(0)
   const [projectName, setProjectName] = useState('')
   const [organization, setOrganization] = useState('')
@@ -22,7 +25,7 @@ export function ProjectsPage({ onOpenProject }: { onOpenProject: (workspace: Con
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    Promise.all([api.controlWorkspaces(), api.controlJobs().catch(() => null)]).then(([data, jobs]) => {
+    Promise.all([api.controlWorkspaces(), api.controlJobs().catch(() => null), api.controlUsageSummary().catch(() => null)]).then(([data, jobs, usage]) => {
       if (cancelled) return
       setRows(data.workspaces || [])
       setDisabled(data.state === 'disabled')
@@ -34,6 +37,12 @@ export function ProjectsPage({ onOpenProject }: { onOpenProject: (workspace: Con
         next[job.workspace_id] = (next[job.workspace_id] || 0) + 1
       }
       setCounts(next)
+      setUsageState(usage?.state || 'error')
+      const grouped: Record<string, UsageSummaryGroup> = {}
+      for (const item of usage?.by_workspace || []) {
+        if (item.workspace_id) grouped[item.workspace_id] = item
+      }
+      setUsageByWorkspace(grouped)
     }).catch(() => {
       if (cancelled) return
       setFailed(true)
@@ -95,6 +104,7 @@ export function ProjectsPage({ onOpenProject }: { onOpenProject: (workspace: Con
               <dl className="mt-4 space-y-1 text-xs text-slate-300">
                 <div>Organization: {shown(row.client_organization)}</div>
                 <div>Jobs: {counts[row.workspace_id] ?? 0}</div>
+                <div>{usageState === 'ready' ? usageSummaryLine(usageByWorkspace[row.workspace_id]) : usageState === 'disabled' ? 'Usage events are off' : 'Usage events unknown'}</div>
               </dl>
             </button>
           ))}

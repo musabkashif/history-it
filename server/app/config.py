@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     database_control_plane_enabled: bool = False
     database_shadow_writes_enabled: bool = False
     database_backfill_enabled: bool = False
+    # Live usage events only. This does not enable shadow writes or historical backfill.
+    database_usage_ingestion_enabled: bool = False
 
     def validate_live(self):
         from pathlib import Path

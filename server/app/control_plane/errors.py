@@ -25,6 +25,10 @@ class Conflict(ControlPlaneError):
     pass
 
 
+class UsageConflict(Conflict):
+    """A second payload for a provider response disagrees with the stored one."""
+
+
 class NotAllowed(ControlPlaneError):
     pass
 

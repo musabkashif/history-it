@@ -66,7 +66,7 @@ class MongoStore:
             raise KeyError(job_id)
         old = current['workspace_id']
         self.db.jobs.update_one({'job_id': job_id}, {'$set': {'workspace_id': new_workspace_id}, '$inc': {'version': 1}})
-        for name in ('folders', 'batches', 'job_events', 'checkpoints', 'register_snapshots'):
+        for name in ('folders', 'batches', 'job_events', 'checkpoints', 'register_snapshots', 'usage_events'):
             self.db[name].update_many({'job_id': job_id, 'workspace_id': old}, {'$set': {'workspace_id': new_workspace_id}})
         return self.get_job(job_id)
 
@@ -167,6 +167,35 @@ class MongoStore:
             )
         ]
         rows.sort(key=lambda row: row.get('captured_at') or '')
+        return rows
+
+    def get_usage_event(self, response_id: str) -> dict | None:
+        return _plain(self.db.usage_events.find_one({'response_id': response_id}, {'_id': 0}))
+
+    def insert_usage_event(self, doc: dict) -> tuple[dict, str]:
+        from app.control_plane.errors import UsageConflict
+        from app.control_plane.usage_events import _MERGE_FIELDS
+
+        existing = self.get_usage_event(doc['response_id'])
+        if existing:
+            if all(existing.get(key) == doc.get(key) for key in _MERGE_FIELDS):
+                return existing, 'existing'
+            raise UsageConflict(doc['response_id'])
+        try:
+            self._insert('usage_events', dict(doc))
+        except DuplicateRecord:
+            existing = self.get_usage_event(doc['response_id'])
+            if existing and all(existing.get(key) == doc.get(key) for key in _MERGE_FIELDS):
+                return existing, 'existing'
+            raise UsageConflict(doc['response_id']) from None
+        return self.get_usage_event(doc['response_id']), 'created'
+
+    def list_usage_events(self, **filters) -> list[dict]:
+        from app.control_plane.usage_events import event_matches
+
+        rows = [_plain(row) for row in self.db.usage_events.find({}, {'_id': 0})]
+        rows = [row for row in rows if event_matches(row, **filters)]
+        rows.sort(key=lambda row: row.get('response_id') or '')
         return rows
 
     def job_count_in_workspace(self, workspace_id: str) -> int:

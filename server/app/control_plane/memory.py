@@ -20,6 +20,7 @@ class MemoryStore:
         self.events: dict[str, dict] = {}
         self.checkpoints: list[dict] = []
         self.snapshots: list[dict] = []
+        self.usage_events: dict[str, dict] = {}
         self.applied_indexes: list[dict] = []
 
     def ensure_indexes(self) -> list[dict]:
@@ -92,6 +93,9 @@ class MemoryStore:
             if event.get('job_id') == job_id and event.get('workspace_id') == old:
                 event['workspace_id'] = new_workspace_id
         for row in self.checkpoints + self.snapshots:
+            if row.get('job_id') == job_id and row.get('workspace_id') == old:
+                row['workspace_id'] = new_workspace_id
+        for row in self.usage_events.values():
             if row.get('job_id') == job_id and row.get('workspace_id') == old:
                 row['workspace_id'] = new_workspace_id
         return _copy(updated)
@@ -202,6 +206,30 @@ class MemoryStore:
             if row.get('job_id') == job_id and row.get('workspace_id') == workspace_id
         ]
         rows.sort(key=lambda row: row.get('captured_at') or '')
+        return [_copy(row) for row in rows]
+
+    def get_usage_event(self, response_id: str) -> dict | None:
+        doc = self.usage_events.get(response_id)
+        return _copy(doc) if doc else None
+
+    def insert_usage_event(self, doc: dict) -> tuple[dict, str]:
+        from app.control_plane.errors import UsageConflict
+        from app.control_plane.usage_events import _MERGE_FIELDS
+
+        existing = self.usage_events.get(doc['response_id'])
+        if existing:
+            if all(existing.get(key) == doc.get(key) for key in _MERGE_FIELDS):
+                return _copy(existing), 'existing'
+            raise UsageConflict(doc['response_id'])
+        stored = _copy(doc)
+        self.usage_events[stored['response_id']] = stored
+        return _copy(stored), 'created'
+
+    def list_usage_events(self, **filters) -> list[dict]:
+        from app.control_plane.usage_events import event_matches
+
+        rows = [row for row in self.usage_events.values() if event_matches(row, **filters)]
+        rows.sort(key=lambda row: row.get('response_id') or '')
         return [_copy(row) for row in rows]
 
     def job_count_in_workspace(self, workspace_id: str) -> int:

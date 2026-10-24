@@ -3,6 +3,7 @@ import { api, ApiError } from '../lib/api'
 import type { ControlJobDetail } from '../lib/types'
 import { controlMessage, controlView, jobScreen, resumeAllowed, sectionLabel, shown, sourceLabel } from '../lib/controlPlaneState'
 import { Alert, Button, SectionHeader, StatusBadge } from '../components/ui'
+import { UsageSummaryPanel } from '../components/UsageSummary'
 
 export function ControlJobPage({
   jobId,
@@ -148,6 +149,9 @@ export function ControlJobPage({
               <div>Evidence: {shown(job.completion_evidence)}</div>
               <div>Last error: {shown(job.last_error)}</div>
             </dl>
+            <div className="mt-5">
+              <UsageSummaryPanel jobId={job.job_id} title="Usage events for this job" />
+            </div>
           </div>
           <RecordTable title="Folders" empty={sectionLabel(detail.folders.length, 'folders')} columns={['Folder', 'Order', 'Authorization', 'Processing', 'Assets']} rows={detail.folders.map(folder => [shown(folder.folder_name || folder.folder_id), shown(folder.discovery_order), shown(folder.authorization_status), shown(folder.processing_status), shown(folder.asset_count)])} />
           <RecordTable title="Batches" empty={sectionLabel(detail.batches.length, 'batches')} columns={['Batch', 'Assets', 'Status', 'Validation', 'Commit', 'Attempt', 'Error']} rows={detail.batches.map(batch => [batch.batch_id, shown(batch.asset_count), shown(batch.status), shown(batch.validation_status), shown(batch.commit_status), shown(batch.attempt_count), shown(batch.error_information)])} />

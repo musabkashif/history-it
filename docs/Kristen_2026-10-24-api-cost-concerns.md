@@ -84,7 +84,7 @@ The OpenAI Usage sheet keeps its existing columns. These columns are added at th
 - Failure Reason
 - Billed
 
-Call ID is `response:{response id}` and is not reused for another response. A provider response that returns only `cache_write_tokens` is stored as a 30-minute cache write, which is the API default. A 12-hour count is stored only when the response includes one. Cache-write tokens are priced with their own rates:
+Call ID is `response:{response id}` and is not reused for another response. The installed Responses usage object has one `cache_write_tokens` count and does not name a retention. That count stays unscoped. It is not stored or priced as a 30-minute write. A 30-minute, 12-hour, or 24-hour column is filled only when the response names that category. An unscoped write has no application estimate. Named cache-write tokens are priced with their own rates, and that number is an application estimate, not an OpenAI charge:
 
 - `OPENAI_CACHE_WRITE_30M_USD_PER_MILLION`
 - `OPENAI_CACHE_WRITE_12H_USD_PER_MILLION`

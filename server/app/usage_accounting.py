@@ -1,11 +1,10 @@
 """Accurate OpenAI usage accounting.
 
-The Responses API reports one input total plus cached-read and cache-write
-counts. Those cache-write tokens are inside the input total. They are not
-ordinary input. The current API default retention is 30 minutes, and that is
-the only retention this application requests. A single cache_write_tokens
-count is therefore the 30-minute write total. A separate 12-hour or 24-hour
-count is stored only when the provider response actually includes one.
+The Responses API reports one input total plus cached-read and one
+cache_write_tokens count. That count does not say whether the write was
+retained for 30 minutes, 12 hours, or 24 hours. A 30-minute or 12-hour column
+is filled only when the response names that category. Otherwise the write
+stays unscoped and the application estimate stays unknown.
 
 OpenAI Usage keeps its existing columns. These columns are added at the right
 edge when a usage row is written:
@@ -46,6 +45,10 @@ ADDED_USAGE_COLUMNS = (
     'Uncached Input Tokens',
     'Cache Write 30m Tokens',
     'Cache Write 12h Tokens',
+    'Cache Write Tokens',
+    'Cache Write 24h Tokens',
+    'Cache Write Retention',
+    'Cost Basis',
     'Part',
     'Failure Reason',
     'Billed',
@@ -62,8 +65,6 @@ _WRITE_12_KEYS = (
     'cache_write_12h_tokens',
     'cache_write_tokens_12h',
     'twelve_hour_cache_write_tokens',
-    'cache_write_24h_tokens',
-    'cache_write_tokens_24h',
 )
 _TOKEN_COLUMNS = (
     ('Input Tokens', 'input_tokens'),
@@ -71,7 +72,13 @@ _TOKEN_COLUMNS = (
     ('Cached Input Tokens', 'cached_input_tokens'),
     ('Cache Write 30m Tokens', 'cache_write_30m_tokens'),
     ('Cache Write 12h Tokens', 'cache_write_12h_tokens'),
+    ('Cache Write Tokens', 'cache_write_tokens'),
+    ('Cache Write 24h Tokens', 'cache_write_24h_tokens'),
     ('Output Tokens', 'output_tokens'),
+)
+_WRITE_24_KEYS = (
+    'cache_write_24h_tokens',
+    'cache_write_tokens_24h',
 )
 
 
@@ -126,8 +133,8 @@ def _whole(value, default=0) -> int:
 
 
 def parse_provider_usage(usage, *, response_id: str, attempt: int, part: int, status: str, failure_reason: str = '') -> dict:
-    """Read the categories the provider returned. Do not fill in missing counts."""
-    if isinstance(usage, dict) and 'cache_write_30m_tokens' in usage and 'input_tokens' in usage:
+    """Read the categories the provider returned. Do not assign a retention the response did not name."""
+    if isinstance(usage, dict) and 'cache_write_retention' in usage and 'input_tokens' in usage:
         record = dict(usage)
         record['response_id'] = str(record.get('response_id') or response_id)
         record['attempt'] = int(record.get('attempt') or attempt)
@@ -146,22 +153,35 @@ def parse_provider_usage(usage, *, response_id: str, attempt: int, part: int, st
     write_30 = _present(details, _WRITE_30_KEYS)
     if write_30 is None:
         write_30 = _present(raw, _WRITE_30_KEYS)
-    write_12 = _present(details, _WRITE_12_KEYS)
+    write_12 = _present(details, ('cache_write_12h_tokens', 'cache_write_tokens_12h', 'twelve_hour_cache_write_tokens'))
     if write_12 is None:
-        write_12 = _present(raw, _WRITE_12_KEYS)
+        write_12 = _present(raw, ('cache_write_12h_tokens', 'cache_write_tokens_12h', 'twelve_hour_cache_write_tokens'))
+    write_24 = _present(details, _WRITE_24_KEYS)
+    if write_24 is None:
+        write_24 = _present(raw, _WRITE_24_KEYS)
     generic = _present(details, ('cache_write_tokens',))
     if generic is None:
         generic = _present(raw, ('cache_write_tokens',))
-    if write_30 is None and write_12 is None:
-        # One cache_write_tokens field is the default 30-minute write count.
-        write_30 = generic or 0
-        write_12 = 0
+    named = [value is not None for value in (write_30, write_12, write_24)]
+    if not any(named):
+        retention = 'unknown'
+        unscoped = '' if generic is None else generic
+        write_30_out = ''
+        write_12_out = ''
+        write_24_out = ''
+        accounted = None if unscoped == '' else cached + int(unscoped)
     else:
-        write_30 = write_30 or 0
-        write_12 = write_12 or 0
-    accounted = cached + write_30 + write_12
+        labels = [name for name, present in (('30m', write_30 is not None), ('12h', write_12 is not None), ('24h', write_24 is not None)) if present]
+        retention = labels[0] if len(labels) == 1 else 'mixed'
+        unscoped = ''
+        write_30_out = 0 if write_30 is None else write_30
+        write_12_out = 0 if write_12 is None else write_12
+        write_24_out = 0 if write_24 is None else write_24
+        accounted = cached + _whole(write_30_out) + _whole(write_12_out) + _whole(write_24_out)
     gap = ''
-    if input_tokens >= accounted:
+    if accounted is None:
+        uncached = ''
+    elif input_tokens >= accounted:
         uncached = input_tokens - accounted
     else:
         uncached = ''
@@ -170,8 +190,11 @@ def parse_provider_usage(usage, *, response_id: str, attempt: int, part: int, st
         'input_tokens': input_tokens,
         'uncached_input_tokens': uncached,
         'cached_input_tokens': cached,
-        'cache_write_30m_tokens': write_30,
-        'cache_write_12h_tokens': write_12,
+        'cache_write_30m_tokens': write_30_out,
+        'cache_write_12h_tokens': write_12_out,
+        'cache_write_24h_tokens': write_24_out,
+        'cache_write_tokens': unscoped,
+        'cache_write_retention': retention,
         'output_tokens': output_tokens,
         'response_id': str(response_id or ''),
         'attempt': int(attempt),
@@ -188,9 +211,16 @@ def _rate(settings, name: str) -> Decimal:
 
 
 def usage_cost(record: dict, settings) -> str:
-    """Price each returned category with its own rate."""
+    """Price each named category. An unnamed cache write has no estimate."""
     if record.get('usage_identity_gap') or record.get('uncached_input_tokens') == '':
-        raise UsageAccountingError(record.get('usage_identity_gap') or 'Uncached input was not returned')
+        raise UsageAccountingError(record.get('usage_identity_gap') or 'A usage category was not returned. The application cannot estimate this cost.')
+    retention = str(record.get('cache_write_retention') or '')
+    unscoped = record.get('cache_write_tokens')
+    write_24 = record.get('cache_write_24h_tokens')
+    if retention == 'unknown' and unscoped not in (None, '', 0):
+        raise UsageAccountingError('Cache-write retention was not returned. The application cannot estimate this cost.')
+    if retention == '24h' or write_24 not in (None, '', 0):
+        raise UsageAccountingError('Cache-write retention is not a confirmed 30-minute or 12-hour category. The cost is unknown.')
     write_30 = _whole(record.get('cache_write_30m_tokens'))
     write_12 = _whole(record.get('cache_write_12h_tokens'))
     rate_30 = _rate(settings, 'openai_cache_write_30m_usd_per_million')
@@ -236,10 +266,14 @@ def usage_row(record: dict, *, project: str, job: str, batch: str, model: str, s
         'Input Tokens': str(record.get('input_tokens', '')),
         'Uncached Input Tokens': '' if record.get('uncached_input_tokens') == '' else str(record.get('uncached_input_tokens')),
         'Cached Input Tokens': str(record.get('cached_input_tokens', '')),
-        'Cache Write 30m Tokens': str(record.get('cache_write_30m_tokens', '')),
-        'Cache Write 12h Tokens': str(record.get('cache_write_12h_tokens', '')),
+        'Cache Write 30m Tokens': '' if record.get('cache_write_30m_tokens') == '' else str(record.get('cache_write_30m_tokens', '')),
+        'Cache Write 12h Tokens': '' if record.get('cache_write_12h_tokens') == '' else str(record.get('cache_write_12h_tokens', '')),
+        'Cache Write Tokens': '' if record.get('cache_write_tokens') == '' else str(record.get('cache_write_tokens', '')),
+        'Cache Write 24h Tokens': '' if record.get('cache_write_24h_tokens') == '' else str(record.get('cache_write_24h_tokens', '')),
+        'Cache Write Retention': str(record.get('cache_write_retention') or ''),
         'Output Tokens': str(record.get('output_tokens', '')),
         'Estimated Cost USD': cost,
+        'Cost Basis': 'application estimate' if cost else 'unknown',
         'Attempt': str(record.get('attempt', '')),
         'Part': str(record.get('part', '')),
         'Elapsed Seconds': str(elapsed),
@@ -358,3 +392,11 @@ def reconcile_usage(*, diagnostics: list[dict], register_rows: list[dict]) -> di
         'mismatches': mismatches,
         'ok': not missing and not duplicates and not mismatches,
     }
+
+
+def record_live_usage(settings, record: dict, batch: dict, cost: str) -> None:
+    """Usage-event ingestion only. This does not enable shadow writes or backfill."""
+    if not getattr(settings, 'database_usage_ingestion_enabled', False):
+        return
+    from app.control_plane.usage_ingest import ingest_live_usage
+    ingest_live_usage(settings, record, batch, cost)
