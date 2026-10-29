@@ -1,6 +1,7 @@
 from __future__ import annotations
 import base64, json, time
 from pathlib import Path
+from app.adapters import IncompleteDriveDownload
 from app.credits import as_credit_error
 from app.diagnostics import Diagnostics, exception_chain
 from app.images import JPEG_QUALITY, ORIGINAL_MAX_BYTES, ORIGINAL_MAX_EDGE, RESIZE_MAX_EDGE, prepare_model_image
@@ -14,12 +15,51 @@ Return Lean Split v2 Asset Staging and Record Staging as the structured object. 
 When Boundary State After Record starts with Open, or Metadata Readiness is Review, write the visual evidence for that decision in Review Note. Leave Review Note blank only when the record is neither Review nor Open. A folder boundary does not by itself close an item."""
 
 CONNECTION_ATTEMPTS = 4
+# Drive media only. Separate from OpenAI connection retries and never unbounded.
+DRIVE_DOWNLOAD_ATTEMPTS = 3
+DRIVE_DOWNLOAD_BACKOFF_SECONDS = 1
+# Provider HTTP 500 binary splits. Depth is capped; size 1 cannot split further.
+PROVIDER_SPLIT_MAX_DEPTH = 6
+PROVIDER_SPLIT_MIN_IMAGES = 2
 
-def _is_connection_error(exc):
+_AMBIGUOUS_TIMEOUT_NAMES = {
+    'APITimeoutError', 'ReadTimeout', 'WriteTimeout', 'PoolTimeout', 'TimeoutError',
+}
+
+_DRIVE_DOWNLOAD_ERROR_NAMES = {
+    'IncompleteRead', 'IncompleteDriveDownload', 'SSLEOFError', 'SSLError',
+    'RemoteDisconnected', 'ConnectionResetError', 'ConnectionAbortedError',
+    'BrokenPipeError', 'ProtocolError', 'TimeoutError',
+}
+
+
+def _walk_exceptions(exc):
     seen = set()
     current = exc
-    while current is not None and id(current) not in seen:
+    while current is not None and id(current) not in seen and len(seen) < 8:
         seen.add(id(current))
+        yield current
+        nxt = current.__cause__
+        if nxt is None and not getattr(current, '__suppress_context__', False):
+            nxt = current.__context__
+        current = nxt
+
+
+def _is_ambiguous_timeout(exc):
+    """True when the provider may already have accepted the request."""
+    for current in _walk_exceptions(exc):
+        names = {cls.__name__ for cls in type(current).__mro__}
+        if names & {'ConnectTimeout', 'ConnectError'}:
+            continue
+        if names & _AMBIGUOUS_TIMEOUT_NAMES:
+            return True
+    return False
+
+
+def _is_connection_error(exc):
+    if _is_ambiguous_timeout(exc):
+        return False
+    for current in _walk_exceptions(exc):
         names = {cls.__name__ for cls in type(current).__mro__}
         if 'APITimeoutError' not in names and names & {
             'APIConnectionError', 'ConnectError', 'ReadError', 'WriteError',
@@ -27,10 +67,22 @@ def _is_connection_error(exc):
             'gaierror', 'TimeoutError',
         }:
             return True
-        current = current.__cause__
-        if current is None and not exc.__suppress_context__:
-            current = getattr(exc, '__context__', None)
-            exc = current
+    return False
+
+
+def _is_drive_download_error(exc):
+    """True for idempotent Drive media transport failures. Never OpenAI timeouts."""
+    if isinstance(exc, IncompleteDriveDownload):
+        return True
+    for current in _walk_exceptions(exc):
+        names = {cls.__name__ for cls in type(current).__mro__}
+        if names & {'APITimeoutError', 'ReadTimeout', 'WriteTimeout', 'PoolTimeout'}:
+            return False
+        if names & _DRIVE_DOWNLOAD_ERROR_NAMES:
+            return True
+        text = f'{type(current).__name__} {current}'.casefold()
+        if 'incomplete read' in text or 'ssleof' in text or 'violation of protocol' in text:
+            return True
     return False
 
 
@@ -61,6 +113,9 @@ def transient_inspection_failure(note: str) -> bool:
         or 'connection error' in text
         or 'error code: 500' in text
         or 'server had an error processing your request' in text
+        or 'provider split depth limit' in text
+        or 'provider_split_max_depth' in text
+        or 'part_below_minimum_split_size' in text
         or text.strip() == 'inspection retry limit reached'
     )
 
@@ -95,8 +150,22 @@ def continuation_context(context, output):
     return copied
 
 
+def _merge_record_operation(previous, incoming):
+    """Keep Create New when a later split part Updates the same in-batch record."""
+    previous_op = (previous.record_operation or '').strip()
+    incoming_op = (incoming.record_operation or '').strip()
+    if previous_op == 'Create New' and incoming_op == 'Update Existing Open Record':
+        incoming.record_operation = 'Create New'
+    return incoming
+
+
 def merge_inspections(parts, continuation_ids=()):
-    """Keep manifest order. A continued record stays one row. Other id clashes stay distinct."""
+    """Keep manifest order. A continued record stays one row. Other id clashes stay distinct.
+
+    Within-batch continuation and repeated Update Existing rows for the same local
+    id collapse to one record. Create-then-Update across split parts stays Create
+    New so identity assignment does not require a committed Sheets row yet.
+    """
     continued = {item for item in continuation_ids if item and item != 'None'}
     assets = []
     records = []
@@ -105,7 +174,15 @@ def merge_inspections(parts, continuation_ids=()):
         remap = {}
         for record in output.records:
             local = record.proposed_record_id
-            if local in seen and local in continued:
+            previous = next((item for item in records if item.proposed_record_id == local), None)
+            same_prior_update = (
+                previous is not None
+                and (previous.record_operation or '').strip() == 'Update Existing Open Record'
+                and (record.record_operation or '').strip() == 'Update Existing Open Record'
+            )
+            if local in seen and (local in continued or same_prior_update):
+                if previous is not None:
+                    record = _merge_record_operation(previous, record)
                 records = [item for item in records if item.proposed_record_id != local]
                 records.append(record)
                 continue
@@ -164,25 +241,220 @@ def _next_part(context) -> int:
     return holder['n']
 
 
-def inspect_resilient(inspect_once, sources, context, on_split=None):
-    """Inspect the authorized images. A provider HTTP 500 is retried in smaller pieces."""
+class ProviderSplitExhausted(RuntimeError):
+    """Provider splits reached the configured depth or minimum part size."""
+
+
+def _split_tree(context) -> list:
+    if not isinstance(context, dict):
+        return []
+    tree = context.setdefault('_provider_split_tree', [])
+    if not isinstance(tree, list):
+        context['_provider_split_tree'] = []
+        return context['_provider_split_tree']
+    return tree
+
+
+def _split_node_id(context, depth: int, parent_id: str | None, branch: str | None) -> str:
+    if parent_id and branch:
+        return f'{parent_id}.{branch}'
+    if isinstance(context, dict):
+        holder = context.setdefault('_split_node_seq', {'n': 0})
+        holder['n'] = int(holder.get('n') or 0) + 1
+        return f'split-{holder["n"]}'
+    return f'split-d{depth}'
+
+
+def _provider_http_status(exc) -> int | None:
+    for current in _walk_exceptions(exc):
+        status = getattr(current, 'status_code', None)
+        if status is not None:
+            try:
+                return int(status)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _usage_billing_fields(usage: dict | None) -> dict:
+    """Record only known usage. Do not invent tokens or billing."""
+    usage = usage or {}
+    response_id = str(usage.get('response_id') or '').strip()
+    token_keys = (
+        'input_tokens', 'cached_input_tokens', 'cache_write_tokens',
+        'cache_write_30m_tokens', 'cache_write_12h_tokens', 'output_tokens',
+    )
+    tokens = {}
+    for key in token_keys:
+        if usage.get(key) not in (None, ''):
+            tokens[key] = usage.get(key)
+    if response_id:
+        billing_status = 'billed_response'
+        billed = True
+    elif tokens:
+        billing_status = 'unknown'
+        billed = None
+    else:
+        billing_status = 'no_response'
+        billed = False
+    return {
+        'response_id': response_id or None,
+        'billed': billed,
+        'billing_status': billing_status,
+        'token_usage': tokens or None,
+    }
+
+
+def _emit_split_event(on_event, on_split, context, event: dict) -> None:
+    tree = _split_tree(context)
+    tree.append(dict(event))
+    if on_event is not None:
+        on_event(event)
+        return
+    if on_split is not None and event.get('event') == 'provider_split':
+        # Legacy callback used by older tests: (exc, sources-like names only via event).
+        class _Exc(Exception):
+            pass
+        legacy = _Exc(event.get('error') or event.get('reason') or 'provider_split')
+        if event.get('http_status') is not None:
+            legacy.status_code = event['http_status']
+        sources = [
+            type('Source', (), {'name': name})()
+            for name in (event.get('filenames') or [])
+        ]
+        on_split(legacy, sources)
+
+
+def inspect_resilient(
+    inspect_once,
+    sources,
+    context,
+    on_split=None,
+    *,
+    on_event=None,
+    depth=0,
+    parent_id=None,
+    node_id=None,
+    branch=None,
+):
+    """Inspect authorized images. Provider HTTP 500s split into smaller pieces.
+
+    Quality settings are unchanged. Split depth and minimum part size are capped
+    so repeated failures cannot fan out without bound.
+    """
+    node_id = node_id or _split_node_id(context, depth, parent_id, branch)
     try:
-        return inspect_once(sources, context)
+        output, usage = inspect_once(sources, context)
+        # Record billed leaves that exist because a parent split. A successful
+        # first request (no parent) stays quiet so normal inspection is unchanged.
+        if parent_id is not None:
+            billing = _usage_billing_fields(usage if isinstance(usage, dict) else {})
+            _emit_split_event(on_event, on_split, context, {
+                'event': 'provider_split_leaf',
+                'kind': 'successful_billed_leaf' if billing['billed'] is True else 'successful_leaf',
+                'node_id': node_id,
+                'parent_id': parent_id,
+                'depth': depth,
+                'reason': 'child_after_parent_provider_failure',
+                'http_status': 200,
+                'source_image_count': len(sources),
+                'filenames': [getattr(source, 'name', '') for source in sources],
+                'application_retry': False,
+                'provider_api_retry': False,
+                'child_split_request': True,
+                **billing,
+            })
+        return output, usage
     except Exception as exc:
         converted = as_credit_error(exc)
         if converted is not exc:
             raise converted from exc
-        if not provider_server_error(exc) or len(sources) < 2:
-            if provider_server_error(exc) and len(sources) == 1:
-                filename = getattr(sources[0], 'name', 'this image')
-                raise RuntimeError(f'OpenAI rejected {filename} with a server error. The other images in the batch can be inspected separately.') from exc
+        http_status = _provider_http_status(exc)
+        filenames = [getattr(source, 'name', '') for source in sources]
+        if not provider_server_error(exc):
             raise
-        if on_split is not None:
-            on_split(exc, sources)
+        if len(sources) < PROVIDER_SPLIT_MIN_IMAGES:
+            filename = filenames[0] if filenames else 'this image'
+            _emit_split_event(on_event, on_split, context, {
+                'event': 'provider_split_exhausted',
+                'kind': 'minimum_part_size',
+                'node_id': node_id,
+                'parent_id': parent_id,
+                'depth': depth,
+                'reason': 'part_below_minimum_split_size',
+                'http_status': http_status,
+                'source_image_count': len(sources),
+                'filenames': filenames,
+                'billed': False,
+                'billing_status': 'unbilled_http_failure',
+                'response_id': None,
+                'token_usage': None,
+                'application_retry': False,
+                'provider_api_retry': False,
+                'child_split_request': False,
+                'error_type': type(exc).__name__,
+                'error': str(exc)[:500],
+            })
+            raise RuntimeError(
+                f'OpenAI rejected {filename} with a server error. The other images in the batch can be inspected separately.'
+            ) from exc
+        if depth >= PROVIDER_SPLIT_MAX_DEPTH:
+            _emit_split_event(on_event, on_split, context, {
+                'event': 'provider_split_exhausted',
+                'kind': 'max_depth',
+                'node_id': node_id,
+                'parent_id': parent_id,
+                'depth': depth,
+                'reason': 'provider_split_max_depth_reached',
+                'http_status': http_status,
+                'source_image_count': len(sources),
+                'filenames': filenames,
+                'billed': False,
+                'billing_status': 'unbilled_http_failure',
+                'response_id': None,
+                'token_usage': None,
+                'application_retry': False,
+                'provider_api_retry': False,
+                'child_split_request': False,
+                'max_depth': PROVIDER_SPLIT_MAX_DEPTH,
+                'error_type': type(exc).__name__,
+                'error': str(exc)[:500],
+            })
+            raise ProviderSplitExhausted(
+                f'Provider split depth limit ({PROVIDER_SPLIT_MAX_DEPTH}) reached for '
+                f'{len(sources)} images starting at {filenames[0] if filenames else "batch"}. '
+                'No further child requests were created. Inspection stopped without staging.'
+            ) from exc
+        _emit_split_event(on_event, on_split, context, {
+            'event': 'provider_split',
+            'kind': 'unsuccessful_parent_request',
+            'node_id': node_id,
+            'parent_id': parent_id,
+            'depth': depth,
+            'reason': 'provider_server_error',
+            'http_status': http_status,
+            'source_image_count': len(sources),
+            'filenames': filenames,
+            'billed': False,
+            'billing_status': 'unbilled_http_failure',
+            'response_id': None,
+            'token_usage': None,
+            'application_retry': False,
+            'provider_api_retry': False,
+            'child_split_request': True,
+            'error_type': type(exc).__name__,
+            'error': str(exc)[:500],
+        })
         midpoint = len(sources) // 2
-        left_output, left_usage = inspect_resilient(inspect_once, sources[:midpoint], context, on_split)
+        left_output, left_usage = inspect_resilient(
+            inspect_once, sources[:midpoint], context, on_split,
+            on_event=on_event, depth=depth + 1, parent_id=node_id, branch='L',
+        )
         right_context = continuation_context(context, left_output)
-        right_output, right_usage = inspect_resilient(inspect_once, sources[midpoint:], right_context, on_split)
+        right_output, right_usage = inspect_resilient(
+            inspect_once, sources[midpoint:], right_context, on_split,
+            on_event=on_event, depth=depth + 1, parent_id=node_id, branch='R',
+        )
         continued = right_context.get('prior_open_item')
         return merge_inspections([left_output, right_output], [continued]), merge_usage([left_usage, right_usage])
 
@@ -231,6 +503,17 @@ class Inspector:
             try:
                 return func()
             except Exception as exc:
+                timed_out = _is_ambiguous_timeout(exc)
+                if timed_out:
+                    # A timeout can happen after the provider accepted the request.
+                    # Do not call that try unbilled, and do not invent token counts.
+                    self.diagnostics.write(
+                        job, batch, attempt, 'usage_outcome_unknown',
+                        operation=operation, try_index=try_index, attempts=CONNECTION_ATTEMPTS,
+                        billed=None, outcome='unknown',
+                        failure_reason='timeout_may_have_been_processed',
+                        error_type=type(exc).__name__,
+                    )
                 if not _is_connection_error(exc):
                     raise
                 if try_index != CONNECTION_ATTEMPTS:
@@ -239,16 +522,57 @@ class Inspector:
                         operation=operation, try_index=try_index, attempts=CONNECTION_ATTEMPTS,
                         error_type=type(exc).__name__, error=str(exc), error_chain=exception_chain(exc),
                     )
-                # The provider did not return usage for this try. Do not invent token counts.
-                self.diagnostics.write(
-                    job, batch, attempt, 'usage_unbilled',
-                    operation=operation, try_index=try_index, attempts=CONNECTION_ATTEMPTS,
-                    billed=False, failure_reason=str(exc)[:300], error_type=type(exc).__name__,
-                )
+                if not timed_out:
+                    # The connection failed before a response. Do not invent token counts.
+                    self.diagnostics.write(
+                        job, batch, attempt, 'usage_unbilled',
+                        operation=operation, try_index=try_index, attempts=CONNECTION_ATTEMPTS,
+                        billed=False, failure_reason=str(exc)[:300], error_type=type(exc).__name__,
+                    )
                 if try_index == CONNECTION_ATTEMPTS:
                     raise
                 self._sleep(delay)
                 delay = min(delay * 2, 16)
+
+    def _download_drive_image(self, job, batch, attempt, source):
+        """Retry only Drive media. Never retries inspection or OpenAI calls."""
+        filename = getattr(source, 'name', '') or getattr(source, 'id', 'image')
+        delay = DRIVE_DOWNLOAD_BACKOFF_SECONDS
+        for try_index in range(1, DRIVE_DOWNLOAD_ATTEMPTS + 1):
+            try:
+                raw = self.drive.image(source)
+                if hasattr(raw, 'read'):
+                    raw = raw.read()
+                if not isinstance(raw, (bytes, bytearray)):
+                    raise TypeError(f'Drive image for {filename} did not return bytes')
+                raw = bytes(raw)
+                if not raw:
+                    raise IncompleteDriveDownload(f'{filename}: downloaded 0 bytes')
+                return raw
+            except Exception as exc:
+                if not _is_drive_download_error(exc):
+                    if filename and filename not in str(exc):
+                        raise RuntimeError(f'Drive download failed for {filename}: {exc}') from exc
+                    raise
+                try:
+                    self.diagnostics.write(
+                        job, batch, attempt, 'drive_download_retry',
+                        filename=filename,
+                        try_index=try_index,
+                        attempts=DRIVE_DOWNLOAD_ATTEMPTS,
+                        error_type=type(exc).__name__,
+                        error=str(exc)[:500],
+                        error_chain=exception_chain(exc),
+                    )
+                except Exception:
+                    pass
+                if try_index == DRIVE_DOWNLOAD_ATTEMPTS:
+                    raise RuntimeError(
+                        f'Drive download failed for {filename} after {DRIVE_DOWNLOAD_ATTEMPTS} attempts: '
+                        f'{type(exc).__name__}: {exc}'
+                    ) from exc
+                self._sleep(delay)
+                delay = min(delay * 2, 4)
 
     def _image_content(self, job, batch, attempt, blobs, file_ids):
         files_api = getattr(getattr(self.client, 'files', None), 'create', None)
@@ -291,18 +615,45 @@ class Inspector:
         def once(chosen, chosen_context):
             return self._inspect_once(job, batch, chosen, chosen_context, rules)
 
-        def on_split(exc, chosen):
+        attempt = int((context or {}).get('inspection_attempt') or 0) if isinstance(context, dict) else 0
+
+        def on_event(event):
             try:
-                self.diagnostics.write(
-                    job, batch, int((context or {}).get('inspection_attempt') or 0), 'provider_split',
-                    error_type=type(exc).__name__, error=str(exc)[:500],
-                    source_image_count=len(chosen),
-                    filenames=[getattr(source, 'name', '') for source in chosen],
-                )
+                name = str(event.get('event') or 'provider_split')
+                payload = {key: value for key, value in event.items() if key != 'event'}
+                self.diagnostics.write(job, batch, attempt, name, **payload)
             except Exception:
                 pass
 
-        return inspect_resilient(once, sources, context, on_split)
+        def _write_tree(reason: str | None = None):
+            tree = _split_tree(context) if isinstance(context, dict) else []
+            if not tree:
+                return None
+            try:
+                return self.diagnostics.write(
+                    job, batch, attempt, 'provider_split_tree',
+                    tree=list(tree),
+                    max_depth=PROVIDER_SPLIT_MAX_DEPTH,
+                    min_images=PROVIDER_SPLIT_MIN_IMAGES,
+                    reason=reason,
+                )
+            except Exception:
+                return None
+
+        try:
+            result = inspect_resilient(once, sources, context, on_event=on_event)
+        except ProviderSplitExhausted as exc:
+            path = _write_tree(str(exc)[:500])
+            if path is not None:
+                setattr(exc, 'diagnostics_path', str(path))
+            setattr(exc, 'split_tree', list(_split_tree(context)) if isinstance(context, dict) else [])
+            raise
+        except Exception:
+            _write_tree()
+            raise
+        _write_tree()
+        return result
+
 
     def _inspect_once(self, job, batch, sources, context, rules):
         prompt_text, prompt_name = _runtime_prompt(self.settings)
@@ -334,10 +685,8 @@ class Inspector:
         jpeg_quality = int(getattr(self.settings, 'image_jpeg_quality', JPEG_QUALITY) or JPEG_QUALITY)
         try:
             for src in sources:
-                raw = self._call(job, batch, attempt, f'drive.image {src.name}', lambda src=src: self.drive.image(src))
-                if hasattr(raw, 'read'):
-                    raw = raw.read()
-                source_bytes = len(raw) if isinstance(raw, (bytes, bytearray)) else None
+                raw = self._download_drive_image(job, batch, attempt, src)
+                source_bytes = len(raw)
                 data, mime, mode = prepare_model_image(
                     raw,
                     getattr(src, 'mime_type', '') or 'image/jpeg',
@@ -350,6 +699,11 @@ class Inspector:
                 blobs.append((src, data, mime))
         except Exception as exc:
             setattr(exc, 'elapsed_seconds', round(time.monotonic() - start, 2))
+            failing = ''
+            if modes:
+                prepared = {item.get('filename') for item in modes}
+                remaining = [getattr(src, 'name', '') for src in sources if getattr(src, 'name', '') not in prepared]
+                failing = remaining[0] if remaining else ''
             try:
                 path = self.diagnostics.write(
                     job, batch, attempt, 'inspection_error', error_type=type(exc).__name__, error=str(exc),
@@ -358,6 +712,7 @@ class Inspector:
                     image_count=len(modes),
                     source_bytes_total=sum(item.get('source_bytes') or 0 for item in modes),
                     prepared_bytes_total=sum(item.get('prepared_bytes') or 0 for item in modes),
+                    failing_filename=failing or None,
                 )
                 setattr(exc, 'diagnostics_path', str(path))
             except Exception:
@@ -506,7 +861,7 @@ class Inspector:
                 elapsed_seconds=elapsed,
                 success=True,
                 image_preparation=modes,
-                estimated_cost_usd=response_meta.get('estimated_cost_usd', 0),
+                estimated_cost_usd=response_meta.get('estimated_cost_usd'),
                 response_id=response_meta['response_id'],
             )
             usage_out = {
@@ -549,7 +904,7 @@ class Inspector:
                     prepared_bytes_total=sum(item.get('prepared_bytes') or 0 for item in modes),
                     prior_open_item_source=payload['prior_open_item_source'],
                     prompt_identifiers=prompt_ids,
-                    estimated_cost_usd=(response_meta or {}).get('estimated_cost_usd', 0),
+                    estimated_cost_usd=(response_meta or {}).get('estimated_cost_usd'),
                     response_id=(response_meta or {}).get('response_id', ''),
                 )
                 setattr(e, 'diagnostics_path', str(path))

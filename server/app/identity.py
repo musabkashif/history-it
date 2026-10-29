@@ -5,7 +5,9 @@ from client_reference.commit_engine import CommitError, split_assets
 
 FOLDER = re.compile(r'^(F\d+)(?:\s+-.*)?$')
 FILENAME_FOLDER = re.compile(r'_(F\d+)_\d+\.[^.]+$', re.IGNORECASE)
-CANON = re.compile(r'^(?P<prefix>[A-Z0-9]+-B\d+)-(?P<folder>F\d+)(?P<ref>-REF)?-(?P<seq>\d+)$')
+# ROOT is the processing-unit code for images authorized directly in a non-F source folder.
+CANON = re.compile(r'^(?P<prefix>[A-Z0-9]+-B\d+)-(?P<folder>F\d+|ROOT)(?P<ref>-REF)?-(?P<seq>\d+)$')
+ROOT_FOLDER = 'ROOT'
 
 
 def project_prefix(project, box):
@@ -18,12 +20,22 @@ def project_prefix(project, box):
 
 
 def folder_code(batch):
+    """Return the processing-unit folder code for this batch.
+
+    F-folder jobs keep the existing F## rule. A root-only batch, where every
+    manifest row shares one non-F folder_name and no row encodes an F-folder,
+    uses ROOT. Ambiguous or empty evidence still raises CommitError.
+    """
     group = (batch.get('Source Group / Folder') or '').strip()
     match = FOLDER.match(group)
     if match:
         return match.group(1)
-    manifest = json.loads(batch.get('Notes') or '{}').get('manifest') or []
+    try:
+        manifest = json.loads(batch.get('Notes') or '{}').get('manifest') or []
+    except json.JSONDecodeError as exc:
+        raise CommitError(f'Cannot determine source folder for batch {batch.get("Batch ID")}') from exc
     found = []
+    root_names = []
     for item in manifest:
         name = (item.get('folder_name') or '').strip()
         if FOLDER.fullmatch(name):
@@ -32,9 +44,20 @@ def folder_code(batch):
         filename = FILENAME_FOLDER.search(item.get('name') or '')
         if filename:
             found.append(filename.group(1).upper())
-    if len(set(found)) != 1:
+            continue
+        if name:
+            root_names.append(name)
+    unique = set(found)
+    if len(unique) == 1:
+        return unique.pop()
+    if unique:
         raise CommitError(f'Cannot determine source folder for batch {batch.get("Batch ID")}')
-    return found[0]
+    if not manifest or len(root_names) != len(manifest) or len(set(root_names)) != 1:
+        raise CommitError(f'Cannot determine source folder for batch {batch.get("Batch ID")}')
+    root_name = root_names[0]
+    if group and group != root_name:
+        raise CommitError(f'Cannot determine source folder for batch {batch.get("Batch ID")}')
+    return ROOT_FOLDER
 
 
 def prefix_for(project, box, ids):
@@ -196,16 +219,88 @@ def _asset_labels(assets):
     return labels
 
 
+_SPLIT_ALIAS = re.compile(r'^(?P<base>.+)~(?P<n>\d+)$')
+
+
+def _alias_base(local: str) -> str:
+    match = _SPLIT_ALIAS.fullmatch(local or '')
+    return match.group('base') if match else (local or '')
+
+
+def _committed_prior_target(local, items, refs, prior):
+    """Return the committed id when local or its split alias names that prior update."""
+    prior = (prior or '').strip()
+    if prior == 'None':
+        prior = ''
+    base = _alias_base(local)
+    if _known(local, items, refs):
+        return local
+    if _known(base, items, refs):
+        return base
+    if prior and _known(prior, items, refs) and (local == prior or base == prior):
+        return prior
+    return ''
+
+
+def _coalesce_prior_update_aliases(assets, records, items, refs, prior):
+    """Collapse id / id~N Update rows that resolve to the same committed prior."""
+    remap = {}
+    for record in records:
+        local = (record.get('Proposed Record ID') or '').strip()
+        if (record.get('Record Operation') or '').strip() != 'Update Existing Open Record':
+            continue
+        target = _committed_prior_target(local, items, refs, prior)
+        if not target or target == local:
+            continue
+        remap[local] = target
+        record['Proposed Record ID'] = target
+    if not remap:
+        return
+    for asset in assets:
+        local = (asset.get('Assigned Record ID') or '').strip()
+        if local in remap:
+            asset['Assigned Record ID'] = remap[local]
+    deduped = []
+    seen = set()
+    for record in reversed(records):
+        local = (record.get('Proposed Record ID') or '').strip()
+        op = (record.get('Record Operation') or '').strip()
+        key = (local, op)
+        if op == 'Update Existing Open Record' and local in seen:
+            continue
+        if op == 'Update Existing Open Record':
+            seen.add(local)
+        deduped.append(record)
+    records[:] = list(reversed(deduped))
+
+
+def _restore_within_batch_creates(records):
+    """An Update of a local id that is also Create New in this aggregate is still Create."""
+    created = {
+        (record.get('Proposed Record ID') or '').strip()
+        for record in records
+        if (record.get('Record Operation') or '').strip() == 'Create New'
+    }
+    for record in records:
+        local = (record.get('Proposed Record ID') or '').strip()
+        if (record.get('Record Operation') or '').strip() == 'Update Existing Open Record' and local in created:
+            record['Record Operation'] = 'Create New'
+
+
 def assign_identity(batch, assets, records, items, refs, other_records, prior):
     """Replace model-local record keys with the register id pattern.
 
     Inspection still decides which assets belong together, whether the record is
     Metadata Only or Normal Odyssey, and whether an existing open item continues.
+    A within-batch Create may be continued without a committed Sheets row. A true
+    cross-batch Update Existing still requires the committed target.
     """
     folder = folder_code(batch)
     prior = (prior or '').strip()
     if prior == 'None':
         prior = ''
+    _coalesce_prior_update_aliases(assets, records, items, refs, prior)
+    _restore_within_batch_creates(records)
     known_ids = _ids(items, 'Item ID') + _ids(refs, 'Reference ID') + _ids(other_records, 'Proposed Record ID')
     prefix = prefix_for(batch.get('Project'), batch.get('Box'), known_ids)
     used = list(known_ids)

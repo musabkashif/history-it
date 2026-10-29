@@ -671,7 +671,10 @@ class Orchestrator:
                     return
                 try:
                     sources,context,rules,reference,prior=self._inspection_inputs(sid,b)
-                except (RegisterStateError,BatchAuthorizationError,ReferenceError) as exc:
+                except (RegisterStateError,BatchAuthorizationError,ReferenceError,CommitError) as exc:
+                    # Source-folder resolution and other pre-inspect commit/register
+                    # errors must not kill the worker after Start returned success.
+                    # Do not mark Inspection In Progress when inputs cannot be built.
                     self._block(sid,b,exc,int(float(b.get('Inspection Attempt') or 0)));return
                 if self.cost(sid,job)>=self.settings.job_spending_limit_usd:
                     self.sheets.write(sid,'Batch Queue',{'Batch Status':'Blocked - Human Review','Error / Retry Note':'Job spending limit reached'},('Batch ID',b['Batch ID']));return

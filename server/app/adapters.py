@@ -5,6 +5,11 @@ import io, threading, time
 
 IMAGE_MIME = {'image/jpeg','image/png','image/tiff','image/webp'}
 
+
+class IncompleteDriveDownload(OSError):
+    """Drive returned fewer bytes than the file metadata size."""
+
+
 def _status(exc):
     resp = getattr(exc, 'resp', None)
     status = getattr(resp, 'status', None)
@@ -187,14 +192,39 @@ class Drive:
             raise ValueError('Duplicate Drive file ID in the authorized source set')
 
     def image(self, source):
-        # Only called by inspection. Never injected into the commit service.
-        return self._execute(lambda: self.api.files().get_media(fileId=source.id,supportsAllDrives=True))
+        """Download one image as complete bytes. Never injected into commit.
+
+        When Drive reports a size, a short body is rejected before inspection.
+        """
+        expected = None
+        try:
+            meta = self._execute(lambda: self.api.files().get(
+                fileId=source.id,
+                fields='size,md5Checksum',
+                supportsAllDrives=True,
+            ))
+            raw_size = meta.get('size')
+            if raw_size not in (None, ''):
+                expected = int(raw_size)
+        except Exception:
+            expected = None
+        data = self._execute(lambda: self.api.files().get_media(fileId=source.id, supportsAllDrives=True))
+        if hasattr(data, 'read'):
+            data = data.read()
+        if not isinstance(data, (bytes, bytearray)):
+            name = getattr(source, 'name', None) or getattr(source, 'id', 'image')
+            raise TypeError(f'Drive image for {name} did not return bytes')
+        data = bytes(data)
+        if expected is not None and len(data) != expected:
+            name = getattr(source, 'name', None) or getattr(source, 'id', 'image')
+            raise IncompleteDriveDownload(f'{name}: downloaded {len(data)} bytes, expected {expected}')
+        return data
 
     def file_meta(self, file_id: str):
         """Read-only Drive metadata for accessibility/type checks (no download)."""
         return self._execute(lambda: self.api.files().get(
             fileId=file_id,
-            fields='id,name,mimeType,driveId',
+            fields='id,name,mimeType,driveId,size,md5Checksum',
             supportsAllDrives=True,
         ))
 
