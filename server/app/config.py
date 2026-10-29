@@ -16,7 +16,8 @@ class Settings(BaseSettings):
     openai_cached_input_usd_per_million: float = Field(default=0, ge=0)
     openai_output_usd_per_million: float = Field(default=0, ge=0)
     # Cache-write tokens are not ordinary input. A zero rate refuses to price
-    # them rather than substituting the input rate. 30-minute is the API default.
+    # them. The usage object does not name a retention, so an unscoped write
+    # stays unknown even when this process requested a 30-minute TTL.
     openai_cache_write_30m_usd_per_million: float = Field(default=0, ge=0)
     openai_cache_write_12h_usd_per_million: float = Field(default=0, ge=0)
     # Optional server-only token for trusted service clients. Empty disables token auth
@@ -47,6 +48,12 @@ class Settings(BaseSettings):
     login_max_failures: int = Field(default=5, ge=1, le=50)
     login_window_seconds: int = Field(default=300, ge=30, le=3600)
     login_lockout_seconds: int = Field(default=300, ge=30, le=3600)
+
+    # Staging-only prompt-cache request shape. Default off keeps the deployed
+    # system-role request. Set true only for an explicit staging test; turning
+    # it back to false is the immediate rollback to the current request shape.
+    # Production must stay false until reliable cost evidence exists.
+    openai_prompt_cache_optimization_enabled: bool = False
 
     # Tri Delta Box 19 F01 checkpoint / Frozen Benchmark harness. Default off —
     # normal operator UI and APIs must not present it as generic verification.

@@ -1,5 +1,5 @@
 from __future__ import annotations
-import base64, json, time
+import base64, time
 from pathlib import Path
 from app.adapters import IncompleteDriveDownload
 from app.credits import as_credit_error
@@ -7,6 +7,13 @@ from app.diagnostics import Diagnostics, exception_chain
 from app.images import JPEG_QUALITY, ORIGINAL_MAX_BYTES, ORIGINAL_MAX_EDGE, RESIZE_MAX_EDGE, prepare_model_image
 from app.decisions import decision_instructions
 from app.models import InspectionOutput
+from app.prompt_cache import (
+    FLAG_NAME,
+    build_inspection_request,
+    cache_diagnostics,
+    governing_instruction,
+    prompt_cache_optimization_enabled,
+)
 
 OUTPUT_SCHEMA = """Structured output schema only. This text does not decide record boundaries, record types, templates, or metadata readiness. Those judgments come from the client runtime prompt, the governing documents, the authorized images, and any client-approved calibration example in the user payload.
 
@@ -718,20 +725,7 @@ class Inspector:
             except Exception:
                 pass
             raise
-        instruction = (
-            'The client runtime prompt below is the canonical inspection workflow. '
-            'Return Lean Split v2 Asset Staging and Record Staging in the structured object. '
-            'Do not update Google Sheets. '
-            'A client-approved calibration example in the user payload is calibration for the named project and box, not a filename rule and not an answer-key extract. '
-            'Inspect every authorized image. Do not copy an example when the images disagree, and do not close an item only because its folder has ended.\n\n'
-            + prompt_text
-            + '\n\n'
-            + '\n\n'.join(references)
-            + '\n\n'
-            + OUTPUT_SCHEMA
-            + '\n\n'
-            + decision_instructions()
-        )
+        instruction = governing_instruction(prompt_text, references, OUTPUT_SCHEMA, decision_instructions())
         prior = context.get('prior_open_item') if isinstance(context, dict) else None
         prior_text = 'None' if prior in (None, '', 'None') else str(prior)
         existing = []
@@ -766,6 +760,8 @@ class Inspector:
         try:
             images = self._image_content(job, batch, attempt, blobs, file_ids)
             image_transport = 'openai_files' if file_ids else 'inline'
+            optimized = prompt_cache_optimization_enabled(self.settings)
+            cache = cache_diagnostics(instruction, reference_version, optimized=optimized)
             self.diagnostics.write(
                 job, batch, attempt, 'request_prepared',
                 model=self.settings.openai_model,
@@ -786,21 +782,20 @@ class Inspector:
                 prepared_bytes_total=sum(item.get('prepared_bytes') or 0 for item in modes),
                 prompt_character_count=len(instruction),
                 rules_count=len(rules),
+                **cache,
             )
-            request = {
-                'model': self.settings.openai_model,
-                'input': [
-                    {'role': 'system', 'content': instruction},
-                    {'role': 'user', 'content': [{'type': 'input_text', 'text': json.dumps(payload)}] + images},
-                ],
-                'text_format': InspectionOutput,
-            }
-            if max_tokens:
-                request['max_output_tokens'] = max_tokens
-            if effort:
-                request['reasoning'] = {'effort': effort}
+            request = build_inspection_request(
+                model=self.settings.openai_model,
+                instruction=instruction,
+                payload=payload,
+                images=images,
+                text_format=InspectionOutput,
+                optimized=optimized,
+                max_output_tokens=max_tokens or None,
+                reasoning_effort=effort or None,
+            )
             response = self._call(job, batch, attempt, 'responses.parse', lambda: self.client.responses.parse(**request))
-            from app.usage_accounting import parse_provider_usage
+            from app.usage_accounting import parse_provider_usage, UsageAccountingError, usage_cost
             part = _next_part(context if isinstance(context, dict) else {})
             response_meta = parse_provider_usage(
                 getattr(response, 'usage', None),
@@ -814,12 +809,25 @@ class Inspector:
             response_meta['job_id'] = job
             response_meta['batch_id'] = batch
             response_meta['elapsed_seconds'] = round(time.monotonic() - start, 2)
+            response_meta[FLAG_NAME] = optimized
+            response_meta['request_shape'] = cache['request_shape']
             output = response.output_parsed
+            cost_complete = False
+            try:
+                response_meta['estimated_cost_usd'] = usage_cost(response_meta, self.settings)
+                cost_complete = True
+            except UsageAccountingError:
+                response_meta['estimated_cost_usd'] = ''
             self.diagnostics.write(
                 job, batch, attempt, 'response_received', **{
                     key: value for key, value in response_meta.items()
                     if key not in {'incomplete_details', 'attempt'}
                 },
+                requested_cache_mode=cache['cache_mode'],
+                requested_cache_ttl=cache['cache_ttl'],
+                prompt_fingerprint=cache['prompt_fingerprint'],
+                cost_complete=cost_complete,
+                cost_basis='application_estimate' if cost_complete else 'unknown',
                 returned_asset_filenames=[a.digital_asset for a in output.assets] if output else [],
                 returned_record_ids=[r.proposed_record_id for r in output.records] if output else [],
             )
