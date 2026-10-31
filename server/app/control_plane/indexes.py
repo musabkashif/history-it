@@ -28,6 +28,16 @@ INDEX_SPECS = (
     {'collection': 'usage_events', 'keys': [('observed_at', 1)], 'unique': False, 'name': 'usage_observed_at'},
     {'collection': 'usage_events', 'keys': [('model', 1)], 'unique': False, 'name': 'usage_model'},
     {'collection': 'usage_events', 'keys': [('status', 1)], 'unique': False, 'name': 'usage_status'},
+    # Admin accounts (durable users + workspace membership). role is always admin for now.
+    {'collection': 'users', 'keys': [('user_id', 1)], 'unique': True, 'name': 'uniq_user_id'},
+    {'collection': 'users', 'keys': [('username_key', 1)], 'unique': True, 'name': 'uniq_username_key'},
+    {
+        'collection': 'workspace_members',
+        'keys': [('user_id', 1), ('workspace_id', 1)],
+        'unique': True,
+        'name': 'uniq_user_workspace',
+    },
+    {'collection': 'workspace_members', 'keys': [('workspace_id', 1)], 'unique': False, 'name': 'member_workspace'},
 )
 
 

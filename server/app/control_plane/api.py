@@ -107,13 +107,57 @@ class CreateProjectRequest(BaseModel):
 def build_router(settings, guard, sheets_provider):
     router = APIRouter(prefix='/api/control')
 
-    def actor(request: Request) -> str | None:
+    def principal(request: Request):
         try:
-            from app.auth import session_from_request
+            from app.auth import session_from_request, principal_from_session
             _token, record = session_from_request(request)
         except Exception:
             return None
-        return record.username if record else None
+        if record is None:
+            return None
+        return principal_from_session(record)
+
+    def actor(request: Request) -> str | None:
+        """Stamp new events with stable user_id when available; else username."""
+        try:
+            from app.accounts.access import stamp_actor
+            who = principal(request)
+            if who is None:
+                return None
+            return stamp_actor(who)
+        except Exception:
+            return None
+
+    def require_workspace_member(request: Request, workspace_id: str | None) -> None:
+        from app.accounts.job_access import assert_workspace_access
+        who = principal(request)
+        if who is None or who.is_service:
+            # Service-token callers and unauthenticated-patched tests bypass membership.
+            return
+        if not workspace_id:
+            # Unknown job/workspace: leave NotFound to the service layer.
+            return
+        assert_workspace_access(settings, who, workspace_id)
+
+    def filter_member_workspaces(request: Request, rows: list) -> list:
+        who = principal(request)
+        if who is None or who.is_service:
+            return rows
+        from app.accounts.service import get_accounts
+        allowed = get_accounts().member_workspace_ids(who.user_id or '')
+        return [row for row in rows if row.get('workspace_id') in allowed]
+
+    def filter_member_jobs(request: Request, rows: list) -> list:
+        return filter_member_workspaces(request, rows)
+
+    def job_workspace_id(job_id: str, workspace_id: str | None) -> str | None:
+        if workspace_id:
+            return workspace_id
+        try:
+            job = service().store.get_job(job_id)
+        except Exception:
+            return None
+        return (job or {}).get('workspace_id')
 
     def correlation(request: Request) -> str | None:
         raw = request.headers.get('idempotency-key') or request.headers.get('x-correlation-id') or ''
@@ -204,7 +248,7 @@ def build_router(settings, guard, sheets_provider):
         if not enabled():
             return disabled_list('workspaces')
         try:
-            rows = service().list_workspaces()
+            rows = filter_member_workspaces(request, service().list_workspaces())
         except HTTPException as exc:
             return _from_http('workspaces', exc)
         except Exception as exc:
@@ -221,7 +265,9 @@ def build_router(settings, guard, sheets_provider):
         environment = getattr(settings, 'control_plane_environment', 'staging') or 'staging'
         workspace_id = workspace_id_for(body.project_name, environment)
         current = ctrl.store.get_workspace(workspace_id)
+        who = principal(request)
         if current:
+            require_workspace_member(request, workspace_id)
             if body.client_organization and not current.get('client_organization'):
                 current = call(lambda: ctrl.create_workspace(
                     project_name=current.get('project_name') or body.project_name,
@@ -232,6 +278,9 @@ def build_router(settings, guard, sheets_provider):
             project_name=body.project_name,
             client_organization=body.client_organization,
         ))
+        if who and who.user_id:
+            from app.accounts.service import get_accounts
+            get_accounts().ensure_membership(who.user_id, created['workspace_id'])
         return {'state': 'ready', 'inspection_started': False, 'already_applied': False, 'workspace': created}
 
     @router.get('/jobs')
@@ -249,11 +298,14 @@ def build_router(settings, guard, sheets_provider):
         guard(request, x_api_token)
         if not enabled():
             return disabled_list('jobs')
+        if workspace_id:
+            require_workspace_member(request, workspace_id)
         try:
             rows = service().list_jobs(
                 workspace_id=workspace_id, project=project, box=box, status=status,
                 source=source, created_from=created_from, created_to=created_to,
             )
+            rows = filter_member_jobs(request, rows)
         except HTTPException as exc:
             return _from_http('jobs', exc)
         except Exception as exc:
@@ -265,6 +317,7 @@ def build_router(settings, guard, sheets_provider):
         guard(request, x_api_token)
         if not enabled():
             raise HTTPException(409, DISABLED)
+        require_workspace_member(request, job_workspace_id(job_id, workspace_id))
         detail = call(lambda: service().get_detail(job_id, workspace_id))
         detail.update({'state': 'ready', 'enabled': True, 'available': True, 'warning': None})
         return detail
@@ -275,6 +328,7 @@ def build_router(settings, guard, sheets_provider):
         if not enabled():
             raise HTTPException(409, DISABLED)
         payload = body or ActionRequest()
+        require_workspace_member(request, job_workspace_id(job_id, payload.workspace_id))
         detail = call(lambda: service().reopen_job(job_id, payload.workspace_id, actor=actor(request), correlation_id=correlation(request)))
         detail.update({'state': 'ready', 'enabled': True, 'available': True, 'warning': None})
         return detail
@@ -285,6 +339,7 @@ def build_router(settings, guard, sheets_provider):
         if not enabled():
             raise HTTPException(409, DISABLED)
         payload = body or ActionRequest()
+        require_workspace_member(request, job_workspace_id(job_id, payload.workspace_id))
         detail = call(lambda: service().resume_job(job_id, payload.workspace_id, actor=actor(request), correlation_id=correlation(request)))
         detail.update({'state': 'ready', 'enabled': True, 'available': True, 'warning': None})
         return detail
@@ -295,6 +350,7 @@ def build_router(settings, guard, sheets_provider):
         if not enabled():
             raise HTTPException(409, DISABLED)
         payload = body or ActionRequest()
+        require_workspace_member(request, job_workspace_id(job_id, payload.workspace_id))
         detail = call(lambda: service().pause_job(job_id, payload.workspace_id, actor=actor(request), correlation_id=correlation(request)))
         detail.update({'state': 'ready', 'enabled': True, 'available': True, 'warning': None})
         return detail
@@ -305,6 +361,7 @@ def build_router(settings, guard, sheets_provider):
         if not enabled():
             raise HTTPException(409, DISABLED)
         payload = body or ActionRequest()
+        require_workspace_member(request, job_workspace_id(job_id, payload.workspace_id))
         detail = call(lambda: service().start_job(job_id, payload.workspace_id, actor=actor(request), correlation_id=correlation(request)))
         detail.update({'state': 'ready', 'enabled': True, 'available': True, 'warning': None})
         return detail
@@ -316,6 +373,7 @@ def build_router(settings, guard, sheets_provider):
             raise HTTPException(409, DISABLED)
         if not body.batch_id:
             raise HTTPException(422, 'batch_id is required.')
+        require_workspace_member(request, job_workspace_id(job_id, body.workspace_id))
         detail = call(lambda: service().retry_batch(job_id, body.batch_id, body.workspace_id, actor=actor(request), correlation_id=correlation(request)))
         detail.update({'state': 'ready', 'enabled': True, 'available': True, 'warning': None})
         return detail
@@ -325,6 +383,7 @@ def build_router(settings, guard, sheets_provider):
         guard(request, x_api_token, mutating=True)
         if not enabled():
             raise HTTPException(409, DISABLED)
+        require_workspace_member(request, job_workspace_id(job_id, body.workspace_id))
         detail = call(lambda: service().complete_job(
             job_id, body.workspace_id, evidence=body.evidence, actor=actor(request), correlation_id=correlation(request),
         ))
@@ -337,6 +396,7 @@ def build_router(settings, guard, sheets_provider):
         if not enabled():
             raise HTTPException(409, DISABLED)
         payload = body or ActionRequest()
+        require_workspace_member(request, job_workspace_id(job_id, payload.workspace_id))
         detail = call(lambda: service().recover_job(job_id, payload.workspace_id, actor=actor(request)))
         detail.update({'state': 'ready', 'enabled': True, 'available': True, 'warning': None})
         return detail
@@ -346,6 +406,10 @@ def build_router(settings, guard, sheets_provider):
         guard(request, x_api_token, mutating=True)
         _require_import()
         detail = call(lambda: _import_one(body, actor(request), correlation(request)))
+        who = principal(request)
+        if who and who.user_id and detail.get('job', {}).get('workspace_id'):
+            from app.accounts.service import get_accounts
+            get_accounts().ensure_membership(who.user_id, detail['job']['workspace_id'])
         detail.setdefault('warnings', [])
         detail.update({'state': 'ready', 'enabled': True, 'available': True, 'warning': None})
         return detail

@@ -9,6 +9,7 @@ from app.control_plane.api import build_router
 from app.control_plane.config import announce
 from app.control_plane.runtime import health_fields
 from app.control_plane.shadow import guarded_shadow
+from pydantic import BaseModel, Field
 from app.models import JobCreate, JobState, BenchmarkRequest, FolderAuthorize, F01CheckpointRequest, LoginRequest
 from app.adapters import Drive, Sheets
 from app.benchmark import CHECKPOINT_SHEETS, SPECS, compare_workbooks, f01_calibration_checkpoint
@@ -16,6 +17,15 @@ from app.google_ids import GoogleIdError
 from app.inspection import Inspector
 from app.orchestrator import Orchestrator
 from app.deployment_admission import apply_boot_hold
+from app.accounts.service import get_accounts
+from app.accounts.job_access import (
+    assert_job_access,
+    check_register_conflict,
+    ensure_workspace_member_for_create,
+    actor_stamp,
+    sheets_job_context,
+)
+from app.accounts.store import get_accounts_store
 from app import auth
 
 DIAGNOSTICS_BUILD='2026-10-06-1'
@@ -26,6 +36,23 @@ app=FastAPI(title='HistoryIT Archive Itemization Automation MVP',version='0.1.0'
 _cors_origins = auth.allowed_origins(settings) or ['http://localhost:5173','http://127.0.0.1:5173']
 app.add_middleware(CORSMiddleware,allow_origins=_cors_origins,allow_credentials=True,allow_methods=['*'],allow_headers=['*'])
 _runtime=None
+
+@app.on_event('startup')
+def bootstrap_admin_accounts():
+ """Idempotent Admin bootstrap into durable Mongo (or test store)."""
+ try:
+  get_accounts_store(settings)
+  get_accounts(settings).ensure_bootstrap(settings)
+ except Exception:
+  # Login remains available; authenticate() will retry bootstrap.
+  pass
+
+def _require_job_access(principal, job_id: str):
+ # Service tokens and patched null guards bypass membership (automation/tests only).
+ if principal is None or getattr(principal, 'is_service', False):
+  return ''
+ project, register_id = sheets_job_context(live, job_id)
+ return assert_job_access(settings, principal, job_id, project=project, register_id=register_id)
 
 def runtime():
  global _runtime
@@ -43,8 +70,11 @@ def live():
  except RuntimeError as e:raise HTTPException(503,str(e))
 
 def guard(request: Request, x_api_token: str | None = None, *, mutating: bool = False):
- """Protect operational APIs. Session cookie or non-empty matching API_TOKEN only."""
- auth.require_auth(request, settings, x_api_token=x_api_token, mutating=mutating)
+ """Protect operational APIs. Session cookie or non-empty matching API_TOKEN only.
+
+ Returns AuthPrincipal for membership and actor stamping.
+ """
+ return auth.require_auth(request, settings, x_api_token=x_api_token, mutating=mutating)
 
 def google_http_exception(exc):
  status=int(exc.status_code)
@@ -56,10 +86,10 @@ def google_http_exception(exc):
  code=status if status in (400,401,403,404,409,429) else 502
  return HTTPException(code,detail)
 
-def finish(operation, result):
+def finish(operation, result, actor=None):
  """Shadow the Sheets result. A database failure must not change the Sheets response."""
  job_id = result.get('job_id') if isinstance(result, dict) else getattr(result, 'job_id', None)
- guarded_shadow(settings, operation, job_id, result, live)
+ guarded_shadow(settings, operation, job_id, result, live, actor=actor)
  return result
 
 def route_guard(request, token=None, mutating=False):
@@ -95,10 +125,25 @@ def health():
   'configured':bool(settings.openai_model and settings.google_application_credentials),
   'diagnostics_build':DIAGNOSTICS_BUILD,
   'diagnostics_dir':str(__import__('pathlib').Path(settings.diagnostics_dir).resolve()),
-  'login_configured':auth.login_configured(settings),
+  'login_configured':get_accounts().login_configured(settings),
   'developer_verification':bool(settings.enable_developer_verification),
   **health_fields(settings),
  }
+
+class ChangePasswordRequest(BaseModel):
+ current_password: str = Field(min_length=1, max_length=512)
+ new_password: str = Field(min_length=10, max_length=200)
+
+class AdminCreateRequest(BaseModel):
+ username: str = Field(min_length=2, max_length=64)
+ password: str = Field(min_length=10, max_length=200)
+ display_name: str | None = Field(default=None, max_length=120)
+
+class AdminPasswordResetRequest(BaseModel):
+ new_password: str = Field(min_length=10, max_length=200)
+
+class AdminActiveRequest(BaseModel):
+ active: bool
 
 def _require_loopback(request: Request) -> None:
  """Host deploy probe only. Nginx does not publish this path.
@@ -125,26 +170,40 @@ def deployment_admission_release(request: Request):
 
 @app.post('/api/auth/login')
 def login(req: LoginRequest, request: Request, response: Response):
- if not auth.login_configured(settings):
+ accounts = get_accounts()
+ if not accounts.login_configured(settings):
   raise HTTPException(503, 'Login is not configured')
  key = auth.client_key(request)
  auth.throttle.assert_allowed(key, settings.login_max_failures, settings.login_window_seconds, settings.login_lockout_seconds)
- username_ok = hmac_compare(settings.app_login_username.strip(), req.username.strip())
- password_ok = auth.verify_password(settings.app_login_password_hash.strip(), req.password)
- if not (username_ok and password_ok):
+ try:
+  user = accounts.authenticate(settings, req.username, req.password)
+ except HTTPException:
   auth.throttle.record_failure(key, settings.login_max_failures, settings.login_window_seconds, settings.login_lockout_seconds)
-  raise HTTPException(401, 'Invalid credentials')
+  raise
  auth.throttle.record_success(key)
- session_token, record = auth.sessions.create(settings.app_login_username.strip(), settings.session_ttl_seconds)
+ # Workspace assignment for the env bootstrap Admin happens in
+ # ensure_bootstrap (via authenticate). Do not grant every Admin every
+ # workspace on login — that would collapse membership isolation.
+ session_token, record = auth.sessions.create(
+  user['username'],
+  settings.session_ttl_seconds,
+  user_id=user['user_id'],
+  role=user.get('role') or 'admin',
+  display_name=user.get('display_name') or user['username'],
+ )
  auth.set_auth_cookies(response, request, settings, session_token, record.csrf_token)
- return {'authenticated': True, 'username': record.username}
+ return auth.session_payload(record)
 
 @app.get('/api/auth/session')
 def session_check(request: Request):
  _token, record = auth.session_from_request(request)
  if record is None:
   return {'authenticated': False}
- return {'authenticated': True, 'username': record.username}
+ if record.user_id:
+  user = get_accounts().get_user(record.user_id)
+  if user is None or not user.get('active', True):
+   return {'authenticated': False}
+ return auth.session_payload(record)
 
 @app.post('/api/auth/logout')
 def logout(request: Request, response: Response):
@@ -158,46 +217,100 @@ def logout(request: Request, response: Response):
  auth.clear_auth_cookies(response, request, settings)
  return {'authenticated': False}
 
+@app.post('/api/auth/change-password')
+def change_password(req: ChangePasswordRequest, request: Request, x_api_token: str | None = Header(default=None)):
+ principal = guard(request, x_api_token, mutating=True)
+ return get_accounts().change_password(principal, req.current_password, req.new_password)
+
+@app.get('/api/auth/admins')
+def list_admins(request: Request, x_api_token: str | None = Header(default=None)):
+ guard(request, x_api_token)
+ return {'admins': get_accounts().list_admins()}
+
+@app.post('/api/auth/admins')
+def create_admin(req: AdminCreateRequest, request: Request, x_api_token: str | None = Header(default=None)):
+ principal = guard(request, x_api_token, mutating=True)
+ return get_accounts().create_admin(principal, username=req.username, password=req.password, display_name=req.display_name)
+
+@app.post('/api/auth/admins/{user_id}/reset-password')
+def reset_admin_password(user_id: str, req: AdminPasswordResetRequest, request: Request, x_api_token: str | None = Header(default=None)):
+ principal = guard(request, x_api_token, mutating=True)
+ return get_accounts().reset_password(principal, user_id, req.new_password)
+
+@app.post('/api/auth/admins/{user_id}/active')
+def set_admin_active(user_id: str, req: AdminActiveRequest, request: Request, x_api_token: str | None = Header(default=None)):
+ principal = guard(request, x_api_token, mutating=True)
+ return get_accounts().set_active(principal, user_id, req.active)
+
 def hmac_compare(expected: str, provided: str) -> bool:
  import hmac as _hmac
  return _hmac.compare_digest(expected, provided)
 
 @app.post('/api/jobs',response_model=JobState)
 def create(req:JobCreate,request:Request,x_api_token:str|None=Header(default=None)):
- guard(request,x_api_token,mutating=True);return finish('create', call(live().create,req))
+ principal = guard(request,x_api_token,mutating=True)
+ ensure_workspace_member_for_create(settings, principal, req.project)
+ check_register_conflict(settings, principal, getattr(req, 'spreadsheet_id', None))
+ return finish('create', call(live().create,req), actor=actor_stamp(principal))
 @app.post('/api/jobs/{job_id}/folders',response_model=JobState)
 def authorize_folder(job_id:str,req:FolderAuthorize,request:Request,x_api_token:str|None=Header(default=None)):
- guard(request,x_api_token,mutating=True);return finish('authorize', call(live().authorize_folder,job_id,req))
+ principal = guard(request,x_api_token,mutating=True)
+ _require_job_access(principal, job_id)
+ return finish('authorize', call(live().authorize_folder,job_id,req), actor=actor_stamp(principal))
 @app.post('/api/jobs/{job_id}/start',response_model=JobState)
 def start(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):
  # Synchronous admission so the response reflects running/already_running.
  # The worker thread owns batch/folder advancement; the browser need not stay open.
- guard(request,x_api_token,mutating=True);return finish('start', call(live().start,job_id))
+ principal = guard(request,x_api_token,mutating=True)
+ _require_job_access(principal, job_id)
+ return finish('start', call(live().start,job_id), actor=actor_stamp(principal))
 @app.get('/api/jobs/{job_id}',response_model=JobState)
-def get_job(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):guard(request,x_api_token);return call(live().state,job_id)
+def get_job(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):
+ principal = guard(request,x_api_token)
+ _require_job_access(principal, job_id)
+ return call(live().state,job_id)
 @app.get('/api/jobs/{job_id}/batches')
 def batches(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):
- guard(request,x_api_token);o=live();sid,rows=call(o._job,job_id);return {'job_id':job_id,'batches':rows,'alert':o.alert(rows)}
+ principal = guard(request,x_api_token)
+ _require_job_access(principal, job_id)
+ o=live();sid,rows=call(o._job,job_id);return {'job_id':job_id,'batches':rows,'alert':o.alert(rows)}
 @app.get('/api/jobs/{job_id}/usage')
 def usage(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):
- guard(request,x_api_token);o=live();sid,rows=call(o._job,job_id);return {'job_id':job_id,'usage':o._usage(sid,job_id),'total_cost_usd':o.cost(sid,job_id),'alert':o.alert(rows)}
+ principal = guard(request,x_api_token)
+ _require_job_access(principal, job_id)
+ o=live();sid,rows=call(o._job,job_id);return {'job_id':job_id,'usage':o._usage(sid,job_id),'total_cost_usd':o.cost(sid,job_id),'alert':o.alert(rows)}
 @app.post('/api/jobs/{job_id}/pause',response_model=JobState)
-def pause(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):guard(request,x_api_token,mutating=True);return finish('pause', call(live().pause,job_id))
+def pause(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):
+ principal = guard(request,x_api_token,mutating=True)
+ _require_job_access(principal, job_id)
+ return finish('pause', call(live().pause,job_id), actor=actor_stamp(principal))
 @app.post('/api/jobs/{job_id}/resume',response_model=JobState)
-def resume(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):guard(request,x_api_token,mutating=True);return finish('resume', call(live().resume,job_id))
+def resume(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):
+ principal = guard(request,x_api_token,mutating=True)
+ _require_job_access(principal, job_id)
+ return finish('resume', call(live().resume,job_id), actor=actor_stamp(principal))
 @app.post('/api/batches/{batch_id}/retry')
-def retry(batch_id:str,request:Request,x_api_token:str|None=Header(default=None)):guard(request,x_api_token,mutating=True);return finish('retry', call(live().retry,batch_id))
+def retry(batch_id:str,request:Request,x_api_token:str|None=Header(default=None)):
+ principal = guard(request,x_api_token,mutating=True)
+ job_id = batch_id.rsplit('-B', 1)[0] if '-B' in batch_id else batch_id
+ _require_job_access(principal, job_id)
+ return finish('retry', call(live().retry,batch_id), actor=actor_stamp(principal))
 @app.post('/api/jobs/{job_id}/reconcile')
 def reconcile(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):
-    guard(request,x_api_token,mutating=True)
+    principal = guard(request,x_api_token,mutating=True)
+    _require_job_access(principal, job_id)
     return call(live().reconcile, job_id)
 
 @app.post('/api/jobs/{job_id}/validate')
 def validate(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):
- guard(request,x_api_token,mutating=True);o=live();sid,rows=call(o._job,job_id);return {'job_id':job_id,'results':[o.committer.validate(sid,r,already=r['Batch Status']=='Committed - Validated') for r in rows]}
+ principal = guard(request,x_api_token,mutating=True)
+ _require_job_access(principal, job_id)
+ o=live();sid,rows=call(o._job,job_id);return {'job_id':job_id,'results':[o.committer.validate(sid,r,already=r['Batch Status']=='Committed - Validated') for r in rows]}
 @app.get('/api/jobs/{job_id}/validation')
 def validations(job_id:str,request:Request,x_api_token:str|None=Header(default=None)):
- guard(request,x_api_token);o=live();sid,rows=call(o._job,job_id);return {'job_id':job_id,'validation':[r for r in o.sheets.rows(sid,'Validation') if r.get('Scope')==job_id or any(r.get('Check ID','').startswith(b['Batch ID']) for b in rows)]}
+ principal = guard(request,x_api_token)
+ _require_job_access(principal, job_id)
+ o=live();sid,rows=call(o._job,job_id);return {'job_id':job_id,'validation':[r for r in o.sheets.rows(sid,'Validation') if r.get('Scope')==job_id or any(r.get('Check ID','').startswith(b['Batch ID']) for b in rows)]}
 def _load_compare_sheets(sheets, spreadsheet_id, names=None):
     loaded = {}
     errors = []

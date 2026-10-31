@@ -25,7 +25,11 @@ export function AppShell({
   setView,
   health,
   username,
+  displayName,
+  role,
   projectName,
+  jobId,
+  jobStatus,
   loadingJob,
   onLogout,
   logoutLoading,
@@ -37,7 +41,11 @@ export function AppShell({
   setView: (v: View) => void
   health?: { configured?: boolean; status?: string; developer_verification?: boolean } | null
   username?: string
+  displayName?: string
+  role?: string
   projectName?: string | null
+  jobId?: string | null
+  jobStatus?: string | null
   loadingJob?: boolean
   onLogout?: () => void
   logoutLoading?: boolean
@@ -89,7 +97,15 @@ export function AppShell({
           })}
         </nav>
         <div className="mt-auto pt-4">
-          {username && <div className="truncate px-3 text-[11px] text-slate-300">Signed in as <span className="text-white">{username}</span></div>}
+          {(displayName || username) && (
+            <div className="space-y-0.5 px-3 text-[11px] text-slate-300">
+              <div className="truncate">Admin <span className="text-white">{displayName || username}</span></div>
+              {username && displayName && displayName !== username && (
+                <div className="truncate text-slate-500">@{username}</div>
+              )}
+              {role && <div className="uppercase tracking-wide text-slate-500">{role}</div>}
+            </div>
+          )}
           {onLogout && (
             <Button tone="ghost" loading={logoutLoading} className="mt-1 w-full justify-start px-3" onClick={onLogout}>
               <LogOut className="h-4 w-4" /> Logout
@@ -104,7 +120,19 @@ export function AppShell({
             <div className="hidden min-w-0 text-xs text-slate-400 sm:block">
               <span className="truncate font-medium text-slate-200">{workspaceLabel}</span>
               <span className="mx-2 text-slate-600">/</span>
-              <span>Operator console</span>
+              <span>Admin console</span>
+              {jobId && (
+                <>
+                  <span className="mx-2 text-slate-600">/</span>
+                  <span className="truncate font-mono text-slate-300" title={jobId}>{jobId.length > 18 ? `${jobId.slice(0, 14)}…` : jobId}</span>
+                </>
+              )}
+              {jobStatus && (
+                <>
+                  <span className="mx-2 text-slate-600">·</span>
+                  <span className="truncate text-slate-300">{jobStatus}</span>
+                </>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-3">

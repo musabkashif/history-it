@@ -69,13 +69,20 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return data as T
 }
 
-export type SessionResponse = { authenticated: boolean; username?: string }
+export type SessionResponse = {
+  authenticated: boolean
+  username?: string
+  user_id?: string | null
+  display_name?: string
+  role?: string
+}
 
 export const api = {
   health: () => request<Health>('/health'),
   login: (username: string, password: string) => request<SessionResponse>('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   session: () => request<SessionResponse>('/api/auth/session'),
   logout: () => request<SessionResponse>('/api/auth/logout', { method: 'POST' }),
+  changePassword: (current_password: string, new_password: string) => request<{ user_id: string; username: string }>('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password, new_password }) }),
   createJob: (body: JobForm) => request<JobState>('/api/jobs', { method: 'POST', body: JSON.stringify({ ...body, batch_size: body.batch_size || undefined }) }),
   getJob: (id: string) => request<JobState>(`/api/jobs/${encodeURIComponent(id)}`),
   getBatches: (id: string) => request<BatchesResponse>(`/api/jobs/${encodeURIComponent(id)}/batches`),

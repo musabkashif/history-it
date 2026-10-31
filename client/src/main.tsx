@@ -17,12 +17,17 @@ import { SettingsPage } from './pages/Settings'
 import { LoginPage } from './pages/Login'
 import './index.css'
 
-const lastJobKey = 'historyit.lastJobId'
+function lastJobStorageKey(userId?: string | null) {
+  return userId ? `historyit.lastJobId.${userId}` : 'historyit.lastJobId'
+}
 
 function App() {
   const [authChecked, setAuthChecked] = useState(false)
   const [authenticated, setAuthenticated] = useState(false)
   const [username, setUsername] = useState('')
+  const [userId, setUserId] = useState<string | null>(null)
+  const [displayName, setDisplayName] = useState('')
+  const [role, setRole] = useState('admin')
   const [logoutLoading, setLogoutLoading] = useState(false)
   const [view, setView] = useState<View>('overview')
   const [job, setJob] = useState<JobState | null>(null)
@@ -54,10 +59,20 @@ function App() {
   const handleUnauthorized = useCallback(() => {
     setAuthenticated(false)
     setUsername('')
+    setUserId(null)
+    setDisplayName('')
+    setRole('admin')
     setJob(null)
     setBatches([])
     setUsage(null)
     setValidation(null)
+  }, [])
+
+  const applySession = useCallback((session: { username?: string; user_id?: string | null; display_name?: string; role?: string }) => {
+    setUsername(session.username || '')
+    setUserId(session.user_id || null)
+    setDisplayName(session.display_name || session.username || '')
+    setRole(session.role || 'admin')
   }, [])
 
   const loadJob = useCallback(async (id: string, silent = false) => {
@@ -82,7 +97,7 @@ function App() {
       setBatches(nextBatches.batches || [])
       setUsage(nextUsage)
       setValidation(nextValidation)
-      localStorage.setItem(lastJobKey, id)
+      localStorage.setItem(lastJobStorageKey(userId), id)
       setHealth(current => ({ ...(current || { status: 'ok' }), status: 'ok', configured: true }))
       setRefreshError(null)
       setLastRefreshAt(new Date().toISOString())
@@ -99,7 +114,7 @@ function App() {
       if (seq === loadSeqRef.current) inFlightRef.current = false
       if (!silent && seq === loadSeqRef.current) setLoading(false)
     }
-  }, [handleUnauthorized])
+  }, [handleUnauthorized, userId])
 
   const refresh = useCallback(async () => { if (job?.job_id) await loadJob(job.job_id) }, [job?.job_id, loadJob])
 
@@ -129,7 +144,7 @@ function App() {
     void api.session().then(session => {
       if (cancelled) return
       setAuthenticated(Boolean(session.authenticated))
-      setUsername(session.username || '')
+      if (session.authenticated) applySession(session)
       setAuthChecked(true)
     }).catch(() => {
       if (cancelled) return
@@ -137,13 +152,13 @@ function App() {
       setAuthChecked(true)
     })
     return () => { cancelled = true }
-  }, [])
+  }, [applySession])
 
   useEffect(() => {
     if (!authenticated) return
-    const id = localStorage.getItem(lastJobKey)
+    const id = localStorage.getItem(lastJobStorageKey(userId))
     if (id) void loadJob(id)
-  }, [authenticated, loadJob])
+  }, [authenticated, loadJob, userId])
 
   useEffect(() => {
     if (!authenticated) return
@@ -201,7 +216,7 @@ function App() {
       const next = await api.createJob(form)
       jobIdRef.current = next.job_id
       setJob(next)
-      localStorage.setItem(lastJobKey, next.job_id)
+      localStorage.setItem(lastJobStorageKey(userId), next.job_id)
       await loadJob(next.job_id, true)
       setView('job')
       return next
@@ -241,7 +256,14 @@ function App() {
   }
 
   if (!authenticated) {
-    return <LoginPage onAuthenticated={(name) => { setUsername(name); setAuthenticated(true) }} />
+    return (
+      <LoginPage
+        onAuthenticated={(session) => {
+          applySession(session)
+          setAuthenticated(true)
+        }}
+      />
+    )
   }
 
   function navigate(next: View) {
@@ -337,7 +359,11 @@ function App() {
       setView={navigate}
       health={health}
       username={username}
-      projectName={job?.project}
+      displayName={displayName}
+      role={role}
+      projectName={controlProject || job?.project}
+      jobId={job?.job_id}
+      jobStatus={job ? displayJobStatus(job) : null}
       loadingJob={loading && !job}
       onLogout={logout}
       logoutLoading={logoutLoading}

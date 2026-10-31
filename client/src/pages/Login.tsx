@@ -3,7 +3,11 @@ import { LockKeyhole } from 'lucide-react'
 import { Alert, Button } from '../components/ui'
 import { ApiError, api } from '../lib/api'
 
-export function LoginPage({ onAuthenticated }: { onAuthenticated: (username: string) => void }) {
+export function LoginPage({
+  onAuthenticated,
+}: {
+  onAuthenticated: (session: { username?: string; user_id?: string | null; display_name?: string; role?: string }) => void
+}) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -16,7 +20,12 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: (username: str
     try {
       const session = await api.login(username.trim(), password)
       if (!session.authenticated) throw new Error('Invalid credentials')
-      onAuthenticated(session.username || username.trim())
+      onAuthenticated({
+        username: session.username || username.trim(),
+        user_id: session.user_id,
+        display_name: session.display_name || session.username || username.trim(),
+        role: session.role || 'admin',
+      })
     } catch (err) {
       if (err instanceof ApiError && (err.status === 401 || err.status === 429)) {
         setError(err.status === 429 ? 'Too many login attempts. Try again later.' : 'Invalid credentials')

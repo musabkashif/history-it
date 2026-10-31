@@ -24,6 +24,9 @@ class SessionRecord:
     username: str
     csrf_token: str
     expires_at: float
+    user_id: str | None = None
+    role: str = 'admin'
+    display_name: str = ''
 
 
 class SessionStore:
@@ -33,10 +36,21 @@ class SessionStore:
         self._lock = threading.Lock()
         self._sessions: dict[str, SessionRecord] = {}
 
-    def create(self, username: str, ttl_seconds: int) -> tuple[str, SessionRecord]:
+    def create(
+        self,
+        username: str,
+        ttl_seconds: int,
+        *,
+        user_id: str | None = None,
+        role: str = 'admin',
+        display_name: str = '',
+    ) -> tuple[str, SessionRecord]:
         token = secrets.token_urlsafe(32)
         record = SessionRecord(
             username=username,
+            user_id=user_id,
+            role=role or 'admin',
+            display_name=display_name or username,
             csrf_token=secrets.token_urlsafe(32),
             expires_at=time.time() + max(60, ttl_seconds),
         )
@@ -228,16 +242,35 @@ def service_token_ok(settings, token: str | None) -> bool:
     return bool(token) and hmac.compare_digest(expected, token)
 
 
+def principal_from_session(record: SessionRecord):
+    from app.accounts.access import AuthPrincipal
+    from app.accounts.models import ROLE_ADMIN
+
+    return AuthPrincipal(
+        user_id=record.user_id,
+        username=record.username,
+        display_name=record.display_name or record.username,
+        role=record.role or ROLE_ADMIN,
+        active=True,
+    )
+
+
 def require_auth(
     request: Request,
     settings,
     *,
     x_api_token: str | None = None,
     mutating: bool = False,
-) -> str:
-    """Authorize an operational API call. Fail closed when unauthenticated."""
+):
+    """Authorize an operational API call. Fail closed when unauthenticated.
+
+    Returns AuthPrincipal. Callers that only need a label may use
+    ``principal.username`` or ``stamp_actor(principal)``.
+    """
+    from app.accounts.access import AuthPrincipal, require_admin
+
     if service_token_ok(settings, x_api_token):
-        return 'service'
+        return AuthPrincipal(username='service', role='service', user_id=None, display_name='service')
 
     token, record = session_from_request(request)
     if record is None:
@@ -247,7 +280,22 @@ def require_auth(
         if not origin_allowed(request, settings):
             raise HTTPException(403, 'Origin not allowed')
         require_csrf(request, record)
-    return record.username
+
+    principal = principal_from_session(record)
+    # Disabled accounts cannot keep using an old cookie.
+    if principal.user_id:
+        from app.accounts.service import get_accounts
+        user = get_accounts(settings).get_user(principal.user_id)
+        if user is None or not user.get('active', True):
+            raise HTTPException(401, 'Unauthorized')
+        principal = AuthPrincipal(
+            user_id=user['user_id'],
+            username=user['username'],
+            display_name=user.get('display_name') or user['username'],
+            role=user.get('role') or 'admin',
+            active=bool(user.get('active', True)),
+        )
+    return require_admin(principal)
 
 
 def protect(settings) -> Callable:
@@ -257,3 +305,12 @@ def protect(settings) -> Callable:
         return require_auth(request, settings, x_api_token=x_api_token, mutating=mutating)
 
     return _dep
+
+def session_payload(record: SessionRecord) -> dict:
+    return {
+        'authenticated': True,
+        'username': record.username,
+        'user_id': record.user_id,
+        'display_name': record.display_name or record.username,
+        'role': record.role or 'admin',
+    }

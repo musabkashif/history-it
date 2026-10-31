@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 from app import auth
+from app.accounts.store import MemoryAccountsStore, set_accounts_store
 
 
 ORIGIN = 'http://testserver'
@@ -17,6 +18,7 @@ class AuthApiTests(unittest.TestCase):
     def setUp(self):
         auth.sessions.clear()
         auth.throttle.clear()
+        set_accounts_store(MemoryAccountsStore())
         self.password = 'correct-horse-battery'
         self.username = 'demo'
         self.hash = PasswordHasher().hash(self.password)
@@ -41,6 +43,7 @@ class AuthApiTests(unittest.TestCase):
             patcher.stop()
         auth.sessions.clear()
         auth.throttle.clear()
+        set_accounts_store(None)
 
     def _login(self, username=None, password=None):
         return self.client.post(
@@ -57,7 +60,7 @@ class AuthApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()['detail'], 'Invalid credentials')
         session = self.client.get('/api/auth/session')
-        self.assertEqual(session.json(), {'authenticated': False})
+        self.assertFalse(session.json().get('authenticated'))
 
     def test_login_session_and_protected_route(self):
         response = self._login()
@@ -67,15 +70,16 @@ class AuthApiTests(unittest.TestCase):
         self.assertTrue(self._csrf())
         session = self.client.get('/api/auth/session')
         self.assertEqual(session.json()['authenticated'], True)
-        with mock.patch.object(main, 'live') as live:
-            live.return_value.state.return_value = {
-                'job_id': 'HIT-1', 'project': 'P', 'spreadsheet_id': 's',
-                'source_folder_id': 'f', 'authorized_source_folder_ids': ['f'],
-                'batches': 0, 'status': 'Authorized / Pending Inspection',
-            }
-            denied = self.client.get('/api/jobs/HIT-1')
-            # still authenticated via cookie from login
-            self.assertEqual(denied.status_code, 200)
+        with mock.patch.object(main, '_require_job_access', return_value=''):
+            with mock.patch.object(main, 'live') as live:
+                live.return_value.state.return_value = {
+                    'job_id': 'HIT-1', 'project': 'P', 'spreadsheet_id': 's',
+                    'source_folder_id': 'f', 'authorized_source_folder_ids': ['f'],
+                    'batches': 0, 'status': 'Authorized / Pending Inspection',
+                }
+                denied = self.client.get('/api/jobs/HIT-1')
+                # still authenticated via cookie from login
+                self.assertEqual(denied.status_code, 200)
 
     def test_operational_api_requires_auth(self):
         response = self.client.get('/api/jobs/HIT-1')
@@ -103,33 +107,35 @@ class AuthApiTests(unittest.TestCase):
 
     def test_csrf_required_for_mutations(self):
         self.assertEqual(self._login().status_code, 200)
-        with mock.patch.object(main, 'live') as live:
-            live.return_value.pause.return_value = {
-                'job_id': 'HIT-1', 'project': 'P', 'spreadsheet_id': 's',
-                'source_folder_id': 'f', 'authorized_source_folder_ids': ['f'],
-                'batches': 0, 'status': 'Paused',
-            }
-            missing = self.client.post('/api/jobs/HIT-1/pause', headers={'Origin': ORIGIN})
-            self.assertEqual(missing.status_code, 403)
-            ok = self.client.post(
-                '/api/jobs/HIT-1/pause',
-                headers={'Origin': ORIGIN, auth.CSRF_HEADER: self._csrf()},
-            )
-            self.assertEqual(ok.status_code, 200)
+        with mock.patch.object(main, '_require_job_access', return_value=''):
+            with mock.patch.object(main, 'live') as live:
+                live.return_value.pause.return_value = {
+                    'job_id': 'HIT-1', 'project': 'P', 'spreadsheet_id': 's',
+                    'source_folder_id': 'f', 'authorized_source_folder_ids': ['f'],
+                    'batches': 0, 'status': 'Paused',
+                }
+                missing = self.client.post('/api/jobs/HIT-1/pause', headers={'Origin': ORIGIN})
+                self.assertEqual(missing.status_code, 403)
+                ok = self.client.post(
+                    '/api/jobs/HIT-1/pause',
+                    headers={'Origin': ORIGIN, auth.CSRF_HEADER: self._csrf()},
+                )
+                self.assertEqual(ok.status_code, 200)
 
     def test_origin_required_for_mutations(self):
         self.assertEqual(self._login().status_code, 200)
-        with mock.patch.object(main, 'live') as live:
-            live.return_value.pause.return_value = {
-                'job_id': 'HIT-1', 'project': 'P', 'spreadsheet_id': 's',
-                'source_folder_id': 'f', 'authorized_source_folder_ids': ['f'],
-                'batches': 0, 'status': 'Paused',
-            }
-            bad = self.client.post(
-                '/api/jobs/HIT-1/pause',
-                headers={auth.CSRF_HEADER: self._csrf(), 'Origin': 'https://evil.example'},
-            )
-            self.assertEqual(bad.status_code, 403)
+        with mock.patch.object(main, '_require_job_access', return_value=''):
+            with mock.patch.object(main, 'live') as live:
+                live.return_value.pause.return_value = {
+                    'job_id': 'HIT-1', 'project': 'P', 'spreadsheet_id': 's',
+                    'source_folder_id': 'f', 'authorized_source_folder_ids': ['f'],
+                    'batches': 0, 'status': 'Paused',
+                }
+                bad = self.client.post(
+                    '/api/jobs/HIT-1/pause',
+                    headers={auth.CSRF_HEADER: self._csrf(), 'Origin': 'https://evil.example'},
+                )
+                self.assertEqual(bad.status_code, 403)
 
     def test_logout_invalidates_session(self):
         self.assertEqual(self._login().status_code, 200)

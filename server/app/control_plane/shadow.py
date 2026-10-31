@@ -27,16 +27,16 @@ def preserve_sheets_result(result, shadow):
     return result
 
 
-def guarded_shadow(settings, operation: str, job_id: str | None, state, runtime_reader) -> None:
+def guarded_shadow(settings, operation: str, job_id: str | None, state, runtime_reader, actor=None) -> None:
     if not getattr(settings, 'database_shadow_writes_enabled', False):
         return
     try:
-        _shadow(settings, operation, job_id, state, runtime_reader)
+        _shadow(settings, operation, job_id, state, runtime_reader, actor=actor)
     except Exception as exc:
         _LOG.warning('MongoDB shadow write failed; Google Sheets workflow continues (%s)', redact(str(exc)))
 
 
-def _shadow(settings, operation: str, job_id: str | None, state, runtime_reader) -> None:
+def _shadow(settings, operation: str, job_id: str | None, state, runtime_reader, actor=None) -> None:
     payload = _as_dict(state)
     job_id = job_id or payload.get('job_id')
     spreadsheet_id = payload.get('spreadsheet_id')
@@ -53,7 +53,14 @@ def _shadow(settings, operation: str, job_id: str | None, state, runtime_reader)
     plan = plan_from_extract(extract, source=JobSource.live, job_id=job_id)
     digest = hashlib.sha256(plan.model_dump_json().encode()).hexdigest()[:16]
     service = ControlService(get_store(settings), getattr(settings, 'control_plane_environment', 'staging'))
-    service.import_record(plan, actor=None, correlation_id=f'shadow:{operation}:{digest}')
+    detail = service.import_record(plan, actor=actor, correlation_id=f'shadow:{operation}:{digest}')
+    # Keep the creating Admin on the workspace when identity is a user_id stamp.
+    if actor and str(actor).startswith('usr-') and detail.get('job', {}).get('workspace_id'):
+        try:
+            from app.accounts.service import get_accounts
+            get_accounts().ensure_membership(actor, detail['job']['workspace_id'])
+        except Exception:
+            pass
 
 
 def _as_dict(state) -> dict:
