@@ -2,7 +2,8 @@ import { AlertTriangle, BarChart3, Check, CirclePause, FileCheck2, FolderPlus, G
 import { useEffect, useRef, useState } from 'react'
 import type { Batch, JobState, UsageResponse, ValidationResponse } from '../lib/types'
 import { displayJobStatus, jobIsRunning, jobIsStartable } from '../lib/types'
-import { Button, Badge, EmptyState, SectionHeader, StatCard, StatusBadge, Alert, statusTone } from '../components/ui'
+import { Modal, ModalActions } from '../components/Modal'
+import { Button, Badge, EmptyState, PageBreadcrumbs, SectionHeader, StatCard, StatusBadge, Alert, statusTone } from '../components/ui'
 import { UsageSummaryPanel } from '../components/UsageSummary'
 
 export function JobPage({
@@ -70,6 +71,12 @@ export function JobPage({
   return (
     <>
       <SectionHeader
+        breadcrumbs={(
+          <PageBreadcrumbs items={onBackToProject
+            ? [{ label: 'Projects', onClick: onBackToProject }, { label: job.project || 'Project', onClick: onBackToProject }, { label: 'Current job' }]
+            : [{ label: 'Current job' }]}
+          />
+        )}
         eyebrow="Odyssey console"
         title={job.project || 'Current job'}
         description={`${job.job_id} · register ${job.spreadsheet_id}`}
@@ -131,34 +138,32 @@ export function JobPage({
       {tab === 'batches' && <BatchTable batches={batches} onRetry={(id) => act(id, () => onRetry(id))} busy={busy} />}
       {tab === 'evidence' && <ValidationPanel validation={validation} />}
       {tab === 'usage' && <UsagePanel usage={usage} jobId={job?.job_id} />}
-      {authorizeOpen && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <form onSubmit={submitFolder} className="surface w-full max-w-lg p-6">
-            <div className="flex items-start justify-between">
-              <div>
-                <div className="eyebrow">Continuation</div>
-                <h2 className="mt-1 text-lg font-semibold text-white">Authorize folder or parent box</h2>
-                <p className="mt-1 text-xs leading-5 text-slate-400">
-                  A parent discovers remaining immediate F-folders. An individual folder queues only itself. This does not start inspection.
-                </p>
-              </div>
-              <button type="button" onClick={() => { if (busy !== 'authorize') setAuthorizeOpen(false) }} className="text-slate-300" disabled={busy === 'authorize'}>×</button>
-            </div>
-            <label className="mt-6 block">
-              <span className="label">Google Drive folder link or ID</span>
-              <input autoFocus className="input" value={folder} onChange={e => setFolder(e.target.value)} placeholder="Parent box or F-folder link / ID" disabled={busy === 'authorize'} />
-            </label>
-            <label className="mt-4 block">
-              <span className="label">Batch size <span className="text-slate-400">(optional)</span></span>
-              <input className="input" type="number" min={1} max={100} value={folderSize} onChange={e => setFolderSize(e.target.value)} placeholder="Use configured default" disabled={busy === 'authorize'} />
-            </label>
-            <div className="mt-6 flex justify-end gap-2">
-              <Button type="button" tone="ghost" onClick={() => setAuthorizeOpen(false)} disabled={busy === 'authorize'}>Cancel</Button>
-              <Button tone="primary" type="submit" loading={busy === 'authorize'}><FolderPlus className="h-4 w-4" /> Queue folder(s)</Button>
-            </div>
-          </form>
-        </div>
-      )}
+      <Modal
+        open={authorizeOpen}
+        eyebrow="Continuation"
+        title="Authorize folder or parent box"
+        description="A parent discovers remaining immediate F-folders. An individual folder queues only itself. This does not start inspection."
+        busy={busy === 'authorize'}
+        onClose={() => { if (busy !== 'authorize') setAuthorizeOpen(false) }}
+        onSubmit={submitFolder}
+        footer={(
+          <ModalActions
+            onCancel={() => { if (busy !== 'authorize') setAuthorizeOpen(false) }}
+            busy={busy === 'authorize'}
+            submitLabel={<><FolderPlus className="h-4 w-4" /> Queue folder(s)</>}
+            submitDisabled={!folder.trim()}
+          />
+        )}
+      >
+        <label className="block">
+          <span className="label">Google Drive folder link or ID</span>
+          <input autoFocus className="input" value={folder} onChange={e => setFolder(e.target.value)} placeholder="Parent box or F-folder link / ID" disabled={busy === 'authorize'} />
+        </label>
+        <label className="mt-4 block">
+          <span className="label">Batch size <span className="font-normal text-slate-400">(optional)</span></span>
+          <input className="input" type="number" min={1} max={100} value={folderSize} onChange={e => setFolderSize(e.target.value)} placeholder="Use configured default" disabled={busy === 'authorize'} />
+        </label>
+      </Modal>
     </>
   )
 }

@@ -255,7 +255,17 @@ function App() {
   const page = view === 'overview'
     ? <Overview job={job} batches={batches} usage={usage} onNavigate={navigate} onRefresh={refresh} loading={loading} lastRefreshAt={lastRefreshAt} refreshError={refreshError} developerVerification={developerVerification} />
     : view === 'new-job'
-      ? <NewJob key={draftProject || 'blank'} projectName={draftProject} onCreated={() => setView('job')} create={createJob} error={newJobError} />
+      ? (
+        <NewJob
+          key={draftProject || 'blank'}
+          projectName={draftProject}
+          projectLocked={openedFromProject && Boolean(draftProject.trim())}
+          onBackToProject={openedFromProject ? () => setView('jobs') : undefined}
+          onCreated={() => setView('job')}
+          create={createJob}
+          error={newJobError}
+        />
+      )
       : view === 'job'
         ? <JobPage
             job={job}

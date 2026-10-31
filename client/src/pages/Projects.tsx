@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
-import { FolderOpen } from 'lucide-react'
+import { FolderOpen, Plus } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ControlWorkspace, UsageSummaryGroup } from '../lib/types'
 import { usageSummaryLine } from '../lib/usageSummary'
 import { controlMessage, controlView, shown } from '../lib/controlPlaneState'
-import { Alert, Button, EmptyState, SectionHeader } from '../components/ui'
+import { ActivityMeta } from '../components/ActivityMeta'
+import { PageLoading } from '../components/loading'
+import { Modal, ModalActions } from '../components/Modal'
+import { Alert, Button, EmptyState, PageBreadcrumbs, SectionHeader, StatusBadge } from '../components/ui'
 
 export function ProjectsPage({ onOpenProject }: { onOpenProject: (workspace: ControlWorkspace) => void }) {
   const [loading, setLoading] = useState(true)
@@ -17,6 +20,7 @@ export function ProjectsPage({ onOpenProject }: { onOpenProject: (workspace: Con
   const [usageState, setUsageState] = useState('loading')
   const [usageByWorkspace, setUsageByWorkspace] = useState<Record<string, UsageSummaryGroup>>({})
   const [reloadKey, setReloadKey] = useState(0)
+  const [createOpen, setCreateOpen] = useState(false)
   const [projectName, setProjectName] = useState('')
   const [organization, setOrganization] = useState('')
   const [creating, setCreating] = useState(false)
@@ -64,6 +68,7 @@ export function ProjectsPage({ onOpenProject }: { onOpenProject: (workspace: Con
       }
       setProjectName('')
       setOrganization('')
+      setCreateOpen(false)
       setReloadKey(value => value + 1)
       onOpenProject(created.workspace)
     } catch (error) {
@@ -80,49 +85,88 @@ export function ProjectsPage({ onOpenProject }: { onOpenProject: (workspace: Con
     disabled,
     empty: !disabled && !failed && !offline && rows.length === 0,
   })
+  const canCreate = view !== 'disabled' && view !== 'offline' && view !== 'loading'
+  const createAction = canCreate ? (
+    <Button tone="primary" onClick={() => { setCreateError(''); setCreateOpen(true) }}>
+      <Plus className="h-4 w-4" /> Create project
+    </Button>
+  ) : null
 
   return (
     <>
-      <SectionHeader eyebrow="Projects" title="Projects" description="Open a project to see its jobs. Google Sheets stays the authoritative register." />
-      {view !== 'ready' && view !== 'empty' && (
-        <Alert kind={view === 'error' ? 'danger' : 'warning'} title={view === 'loading' ? 'Loading' : 'Projects'}>
+      <SectionHeader
+        breadcrumbs={<PageBreadcrumbs items={[{ label: 'Projects' }]} />}
+        eyebrow="Projects"
+        title="Projects"
+        description="Open a project to see its jobs. Google Sheets stays the authoritative register."
+        actions={createAction}
+      />
+      {view === 'loading' && <PageLoading label="Loading projects" />}
+      {view !== 'ready' && view !== 'empty' && view !== 'loading' && (
+        <Alert kind={view === 'error' ? 'danger' : 'warning'} title="Projects">
           {warning || controlMessage(view)}
         </Alert>
       )}
-      {view === 'empty' && <EmptyState title="No projects yet" body="Create a project by name. That does not create a register or start inspection." />}
+      {view === 'empty' && (
+        <EmptyState
+          title="No projects yet"
+          body="Create a project by name. That does not create a register or start inspection."
+          action={createAction}
+        />
+      )}
       {view === 'ready' && (
         <div className="grid gap-4 md:grid-cols-2">
           {rows.map(row => (
             <button key={row.workspace_id} onClick={() => onOpenProject(row)} className="surface p-5 text-left transition hover:border-cyan/40">
               <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-xs uppercase tracking-wide text-slate-400">{shown(row.environment)}</div>
-                  <h2 className="mt-1 text-lg font-semibold text-white">{shown(row.project_name)}</h2>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge status={shown(row.status || row.environment || 'workspace')} />
+                    <span className="text-xs uppercase tracking-wide text-slate-400">{shown(row.environment)}</span>
+                  </div>
+                  <h2 className="mt-2 truncate text-lg font-semibold text-white">{shown(row.project_name)}</h2>
                 </div>
-                <FolderOpen className="h-5 w-5 text-cyan" />
+                <FolderOpen className="h-5 w-5 shrink-0 text-cyan" aria-hidden="true" />
               </div>
               <dl className="mt-4 space-y-1 text-xs text-slate-300">
                 <div>Organization: {shown(row.client_organization)}</div>
-                <div>Jobs: {counts[row.workspace_id] ?? 0}</div>
+                <div className="font-medium text-slate-200">Jobs: {counts[row.workspace_id] ?? 0}</div>
                 <div>{usageState === 'ready' ? usageSummaryLine(usageByWorkspace[row.workspace_id]) : usageState === 'disabled' ? 'Usage events are off' : 'Usage events unknown'}</div>
               </dl>
+              <ActivityMeta className="mt-4" createdAt={row.created_at} updatedAt={row.updated_at} activityLabel="Updated" />
             </button>
           ))}
         </div>
       )}
-      {view === 'loading' && <div className="mt-4"><Button loading>Loading projects</Button></div>}
-      {view !== 'disabled' && view !== 'offline' && view !== 'loading' && (
-        <div className="surface mt-6 p-5">
-          <h2 className="text-sm font-semibold text-white">Create a project</h2>
-          <p className="mt-1 text-xs text-slate-400">Records the project name and an optional organization. It does not create a register, queue a job, or start inspection.</p>
-          {createError && <div className="mt-3"><Alert kind="danger" title="Project">{createError}</Alert></div>}
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <input className="input" placeholder="Project name" value={projectName} onChange={event => setProjectName(event.target.value)} disabled={creating} />
-            <input className="input" placeholder="Organization, if known" value={organization} onChange={event => setOrganization(event.target.value)} disabled={creating} />
-          </div>
-          <Button className="mt-4" tone="primary" loading={creating} onClick={createProject}>Create project</Button>
+      <Modal
+        open={createOpen}
+        title="Create a project"
+        eyebrow="Projects"
+        description="Records the project name and an optional organization. It does not create a register, queue a job, or start inspection."
+        busy={creating}
+        onClose={() => { if (!creating) setCreateOpen(false) }}
+        onSubmit={event => { event.preventDefault(); void createProject() }}
+        footer={(
+          <ModalActions
+            onCancel={() => { if (!creating) setCreateOpen(false) }}
+            busy={creating}
+            submitLabel="Create project"
+            submitDisabled={!projectName.trim()}
+          />
+        )}
+      >
+        {createError && <div className="mb-4"><Alert kind="danger" title="Project">{createError}</Alert></div>}
+        <div className="grid gap-4">
+          <label>
+            <span className="label">Project name</span>
+            <input className="input" value={projectName} onChange={event => setProjectName(event.target.value)} disabled={creating} autoFocus required />
+          </label>
+          <label>
+            <span className="label">Organization <span className="font-normal text-slate-400">(optional)</span></span>
+            <input className="input" value={organization} onChange={event => setOrganization(event.target.value)} disabled={creating} placeholder="Organization, if known" />
+          </label>
         </div>
-      )}
+      </Modal>
     </>
   )
 }

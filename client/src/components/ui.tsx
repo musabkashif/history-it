@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
-import { Check, ChevronDown, CircleAlert, Info, Loader2, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, CircleAlert, Info, Loader2, X } from 'lucide-react'
 
 const buttonTones = {
   primary: 'bg-cyan text-[#032f3a] enabled:hover:bg-[#0bb8be] enabled:active:bg-[#077f84] focus-visible:ring-cyan/50',
@@ -36,5 +36,36 @@ export function StatCard({ label, value, hint, icon, tone = 'cyan' }: { label: s
 }
 export function EmptyState({ title, body, action }: { title: string; body: string; action?: ReactNode }) { return <div className="surface-muted flex min-h-48 flex-col items-center justify-center px-6 text-center"><div className="mb-3 rounded-full border border-line bg-white/5 p-3 text-slate-300"><Info className="h-5 w-5" /></div><h3 className="text-sm font-semibold text-slate-100">{title}</h3><p className="mt-1 max-w-md text-xs leading-5 text-slate-300">{body}</p>{action && <div className="mt-4">{action}</div>}</div> }
 export function Alert({ kind = 'info', title, children, onClose }: { kind?: 'info'|'warning'|'danger'|'success'; title?: string; children: ReactNode; onClose?: () => void }) { const C = kind === 'danger' ? CircleAlert : kind === 'success' ? Check : kind === 'warning' ? CircleAlert : Info; const color = kind === 'danger' ? 'border-rose/30 bg-rose/10 text-rose-200' : kind === 'warning' ? 'border-amber/30 bg-amber/10 text-amber' : kind === 'success' ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200' : 'border-cyan/25 bg-cyan/10 text-cyan'; return <div className={`flex gap-3 rounded-xl border p-4 text-sm ${color}`}><C className="mt-0.5 h-4 w-4 shrink-0" /><div className="min-w-0 flex-1"><div className="font-semibold">{title}</div><div className="mt-1 text-xs leading-5 opacity-90">{children}</div></div>{onClose && <button onClick={onClose} className="opacity-60 hover:opacity-100"><X className="h-4 w-4" /></button>}</div> }
-export function SectionHeader({ eyebrow, title, description, actions }: { eyebrow?: string; title: string; description?: string; actions?: ReactNode }) { return <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div>{eyebrow && <div className="eyebrow">{eyebrow}</div>}<h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">{title}</h1>{description && <p className="mt-1 max-w-2xl text-sm text-slate-300">{description}</p>}</div>{actions && <div className="flex items-center gap-2">{actions}</div>}</div> }
+export function SectionHeader({ eyebrow, title, description, actions, breadcrumbs }: { eyebrow?: string; title: string; description?: string; actions?: ReactNode; breadcrumbs?: ReactNode }) {
+  return (
+    <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+      <div>
+        {breadcrumbs}
+        {!breadcrumbs && eyebrow && <div className="eyebrow">{eyebrow}</div>}
+        <h1 className={`${breadcrumbs || eyebrow ? 'mt-1' : ''} text-2xl font-semibold tracking-tight text-white`}>{title}</h1>
+        {description && <p className="mt-1 max-w-2xl text-sm text-slate-300">{description}</p>}
+      </div>
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+    </div>
+  )
+}
+
+export function PageBreadcrumbs({ items }: { items: Array<{ label: string; onClick?: () => void }> }) {
+  if (!items.length) return null
+  return (
+    <nav aria-label="Breadcrumb" className="mb-2 flex flex-wrap items-center gap-1 text-xs text-slate-400">
+      {items.map((item, index) => (
+        <span key={`${item.label}-${index}`} className="inline-flex items-center gap-1">
+          {index > 0 && <ChevronRight className="h-3 w-3 text-slate-600" aria-hidden="true" />}
+          {item.onClick ? (
+            <button type="button" className="rounded hover:text-cyan" onClick={item.onClick}>{item.label}</button>
+          ) : (
+            <span className="text-slate-300" aria-current="page">{item.label}</span>
+          )}
+        </span>
+      ))}
+    </nav>
+  )
+}
+
 export function Select({ label, value, onChange, children }: { label: string; value: string; onChange: (v: string) => void; children: ReactNode }) { return <label className="block"><span className="label">{label}</span><div className="relative"><select className="input appearance-none pr-10" value={value} onChange={e => onChange(e.target.value)}>{children}</select><ChevronDown className="pointer-events-none absolute right-3 top-3.5 h-4 w-4 text-slate-500" /></div></label> }

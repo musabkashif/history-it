@@ -1,9 +1,14 @@
 import { useEffect, useState } from 'react'
+import { Import, Plus } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ControlJob, ControlJobFilters, UsageSummaryResponse } from '../lib/types'
 import { provenCostLabel, usageSummaryLine } from '../lib/usageSummary'
 import { controlMessage, controlView, shown, sourceLabel } from '../lib/controlPlaneState'
-import { Alert, Button, EmptyState, SectionHeader, StatusBadge } from '../components/ui'
+import { pickJobActivity } from '../lib/formatTime'
+import { ActivityMeta, MetadataLine } from '../components/ActivityMeta'
+import { PageLoading } from '../components/loading'
+import { Modal, ModalActions } from '../components/Modal'
+import { Alert, Button, EmptyState, PageBreadcrumbs, SectionHeader, StatusBadge } from '../components/ui'
 
 export function JobsPage({
   workspaceId,
@@ -30,6 +35,7 @@ export function JobsPage({
   const [rows, setRows] = useState<ControlJob[]>([])
   const [usage, setUsage] = useState<UsageSummaryResponse | null>(null)
   const [filters, setFilters] = useState<ControlJobFilters>({ workspace_id: workspaceId || '' })
+  const [importOpen, setImportOpen] = useState(false)
   const [importForm, setImportForm] = useState({ job_id: '', register_url: '', register_file_reference: '', source: 'historical' as 'historical' | 'imported', deployed_release: '' })
   const [importError, setImportError] = useState('')
   const [importing, setImporting] = useState(false)
@@ -89,6 +95,7 @@ export function JobsPage({
         setImportError('Import reported that inspection started. That is not allowed.')
         return
       }
+      setImportOpen(false)
       setReloadKey(value => value + 1)
       onOpenJob(created.job)
     } catch (error) {
@@ -98,45 +105,85 @@ export function JobsPage({
     }
   }
 
+  const canMutate = view !== 'disabled' && view !== 'offline' && view !== 'loading'
+  const createButton = canMutate ? <Button tone="primary" onClick={onCreateJob}><Plus className="h-4 w-4" /> Create a job</Button> : null
+  const importButton = canMutate ? (
+    <Button tone="secondary" onClick={() => { setImportError(''); setImportOpen(true) }}>
+      <Import className="h-4 w-4" /> Import job
+    </Button>
+  ) : null
+
   return (
     <>
       <SectionHeader
-        eyebrow="Project"
+        breadcrumbs={(
+          <PageBreadcrumbs items={[
+            { label: 'Projects', onClick: onBack },
+            { label: projectName || 'Project' },
+          ]} />
+        )}
         title={projectName || 'Project'}
-        description="Jobs for this project only. A live job opens the current Sheets workflow. A historical job stays read-only. Missing usage-event cost stays unknown."
+        description="Jobs for this project. Live jobs open the Sheets workflow; historical jobs stay read-only."
         actions={(
           <>
-            <Button tone="ghost" onClick={onBack}>All projects</Button>
-            <Button tone="primary" onClick={onCreateJob}>Create a job</Button>
+            {importButton}
+            {createButton}
           </>
         )}
       />
       <div className="mb-5 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-        <input className="input" placeholder="Box" value={filters.box || ''} onChange={event => setFilters(current => ({ ...current, box: event.target.value }))} />
-        <select className="input" value={filters.status || ''} onChange={event => setFilters(current => ({ ...current, status: event.target.value }))}>
-          <option value="">Any status</option>
-          {['queued', 'running', 'paused', 'blocked', 'validated', 'failed', 'completed', 'unknown'].map(item => <option key={item} value={item}>{item}</option>)}
-        </select>
-        <select className="input" value={filters.source || ''} onChange={event => setFilters(current => ({ ...current, source: event.target.value }))}>
-          <option value="">Any source</option>
-          <option value="live">Live</option>
-          <option value="imported">Imported</option>
-          <option value="historical">Historical</option>
-        </select>
-        <input className="input" type="date" aria-label="Created from" value={filters.created_from || ''} onChange={event => setFilters(current => ({ ...current, created_from: event.target.value }))} />
-        <input className="input" type="date" aria-label="Created to" value={filters.created_to || ''} onChange={event => setFilters(current => ({ ...current, created_to: event.target.value }))} />
+        <label>
+          <span className="label">Box</span>
+          <input className="input" placeholder="Box" value={filters.box || ''} onChange={event => setFilters(current => ({ ...current, box: event.target.value }))} />
+        </label>
+        <label>
+          <span className="label">Status</span>
+          <select className="input" value={filters.status || ''} onChange={event => setFilters(current => ({ ...current, status: event.target.value }))}>
+            <option value="">Any status</option>
+            {['queued', 'running', 'paused', 'blocked', 'validated', 'failed', 'completed', 'unknown'].map(item => <option key={item} value={item}>{item}</option>)}
+          </select>
+        </label>
+        <label>
+          <span className="label">Source</span>
+          <select className="input" value={filters.source || ''} onChange={event => setFilters(current => ({ ...current, source: event.target.value }))}>
+            <option value="">Any source</option>
+            <option value="live">Live</option>
+            <option value="imported">Imported</option>
+            <option value="historical">Historical</option>
+          </select>
+        </label>
+        <label>
+          <span className="label">Created from</span>
+          <input className="input" type="date" aria-label="Created from" value={filters.created_from || ''} onChange={event => setFilters(current => ({ ...current, created_from: event.target.value }))} />
+        </label>
+        <label>
+          <span className="label">Created to</span>
+          <input className="input" type="date" aria-label="Created to" value={filters.created_to || ''} onChange={event => setFilters(current => ({ ...current, created_to: event.target.value }))} />
+        </label>
       </div>
-      {usage?.state === 'ready' && <p className="mb-4 text-sm text-slate-200">{projectName || 'Workspace'} total: {usageSummaryLine(usage.summary)}</p>}
+      {usage?.state === 'ready' && <p className="mb-4 text-sm text-slate-200">Total: {usageSummaryLine(usage.summary)}</p>}
       {usage?.state === 'disabled' && <p className="mb-4 text-xs text-slate-400">Usage events are off. Google Sheets remains the register.</p>}
-      {view !== 'ready' && view !== 'empty' && (
+      {view === 'loading' && <PageLoading label="Loading jobs" />}
+      {view !== 'ready' && view !== 'empty' && view !== 'loading' && (
         <Alert kind={view === 'error' ? 'danger' : 'warning'} title="Control plane">{warning || controlMessage(view)}</Alert>
       )}
-      {view === 'empty' && <EmptyState title="No jobs" body={warning || 'No jobs match these filters.'} />}
+      {view === 'empty' && (
+        <EmptyState
+          title="No jobs"
+          body={warning || 'No jobs match these filters.'}
+          action={(
+            <div className="flex flex-wrap justify-center gap-2">
+              {importButton}
+              {createButton}
+            </div>
+          )}
+        />
+      )}
       {view === 'ready' && sheetsJobMatches && sheetsJob && (
         <div className="surface mb-4 flex flex-wrap items-center justify-between gap-3 p-4">
           <div>
             <div className="text-xs uppercase tracking-wide text-slate-400">Current Sheets job</div>
-            <div className="mt-1 text-sm text-white">{sheetsJob.job_id}</div>
+            <div className="mt-1 text-sm text-white" title={sheetsJob.job_id}>{sheetsJob.job_id}</div>
             <div className="mt-1 text-xs text-slate-400">This is the job already open in the Sheets workflow. It is not a second copy.</div>
           </div>
           <div className="flex items-center gap-3">
@@ -146,51 +193,91 @@ export function JobsPage({
         </div>
       )}
       {view === 'ready' && rows.length > 0 && (
-        <div className="surface overflow-x-auto">
-          <table className="min-w-full text-left text-sm">
-            <thead className="text-xs uppercase tracking-wide text-slate-400">
-              <tr>
-                <th className="px-4 py-3">Project</th>
-                <th className="px-4 py-3">Box</th>
-                <th className="px-4 py-3">Job</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Source</th>
-                <th className="px-4 py-3">Updated</th>
-                <th className="px-4 py-3">Calculated estimate</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(row => (
-                <tr key={row.job_id} className="border-t border-white/5">
-                  <td className="px-4 py-3 text-slate-100">{shown(row.project_name)}</td>
-                  <td className="px-4 py-3 text-slate-300">{shown(row.box_label)}</td>
-                  <td className="px-4 py-3"><button className="text-cyan hover:underline" onClick={() => onOpenJob(row)}>{row.job_id}</button></td>
-                  <td className="px-4 py-3"><StatusBadge status={row.job_status || 'unknown'} /></td>
-                  <td className="px-4 py-3 text-slate-300">{sourceLabel(row.source)}</td>
-                  <td className="px-4 py-3 text-xs text-slate-400">{shown(row.updated_at)}</td>
-                  <td className="px-4 py-3 text-slate-200">{usage?.state === 'ready' ? provenCostLabel(usage.by_job.find(item => item.job_id === row.job_id)) : 'Unknown'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="grid gap-4">
+          {rows.map(row => {
+            const activity = pickJobActivity(row)
+            const progress = row.summary_counts
+              ? `${shown(row.summary_counts.completed_batch_count)}/${shown(row.summary_counts.batch_count)} batches`
+              : null
+            return (
+              <button
+                key={row.job_id}
+                type="button"
+                onClick={() => onOpenJob(row)}
+                className="surface w-full p-5 text-left transition hover:border-cyan/40"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <StatusBadge status={row.job_status || 'unknown'} />
+                      <span className="text-xs text-slate-400">{sourceLabel(row.source)}</span>
+                    </div>
+                    <h2 className="mt-2 text-base font-semibold text-white" title={row.job_id}>
+                      {shown(row.box_label) !== '—' ? `Box ${shown(row.box_label)}` : 'Job'}
+                    </h2>
+                    <MetadataLine className="mt-1">
+                      <span title={row.job_id}>ID {row.job_id.length > 18 ? `${row.job_id.slice(0, 14)}…` : row.job_id}</span>
+                      {progress && <span>Progress {progress}</span>}
+                      <span>{usage?.state === 'ready' ? provenCostLabel(usage.by_job.find(item => item.job_id === row.job_id)) : 'Unknown estimate'}</span>
+                    </MetadataLine>
+                  </div>
+                </div>
+                <ActivityMeta
+                  className="mt-4"
+                  createdAt={activity.created}
+                  activityAt={activity.activity}
+                  activityLabel={activity.activityLabel}
+                />
+              </button>
+            )
+          })}
         </div>
       )}
-      <div className="surface mt-6 p-5">
-        <h2 className="text-sm font-semibold text-white">Import previous job</h2>
-        <p className="mt-1 text-xs text-slate-400">Saves a historical or imported record from a job ID and a register URL or file reference. It does not start inspection or rewrite the register.</p>
-        {importError && <div className="mt-3"><Alert kind="danger" title="Import">{importError}</Alert></div>}
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
-          <input className="input" placeholder="Job ID" value={importForm.job_id} onChange={event => setImportForm(current => ({ ...current, job_id: event.target.value }))} />
-          <select className="input" value={importForm.source} onChange={event => setImportForm(current => ({ ...current, source: event.target.value as 'historical' | 'imported' }))}>
-            <option value="historical">Historical</option>
-            <option value="imported">Imported</option>
-          </select>
-          <input className="input" placeholder="Register URL" value={importForm.register_url} onChange={event => setImportForm(current => ({ ...current, register_url: event.target.value }))} />
-          <input className="input" placeholder="Register file reference" value={importForm.register_file_reference} onChange={event => setImportForm(current => ({ ...current, register_file_reference: event.target.value }))} />
-          <input className="input" placeholder="Release, if known" value={importForm.deployed_release} onChange={event => setImportForm(current => ({ ...current, deployed_release: event.target.value }))} />
+      <Modal
+        open={importOpen}
+        title="Import previous job"
+        eyebrow="Project"
+        description="Saves a historical or imported record from a job ID and a register URL or file reference. It does not start inspection or rewrite the register."
+        busy={importing}
+        size="lg"
+        onClose={() => { if (!importing) setImportOpen(false) }}
+        onSubmit={event => { event.preventDefault(); void submitImport() }}
+        footer={(
+          <ModalActions
+            onCancel={() => { if (!importing) setImportOpen(false) }}
+            busy={importing}
+            submitLabel="Import record"
+            submitDisabled={!importForm.job_id.trim()}
+          />
+        )}
+      >
+        {importError && <div className="mb-4"><Alert kind="danger" title="Import">{importError}</Alert></div>}
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="md:col-span-1">
+            <span className="label">Job ID</span>
+            <input className="input" value={importForm.job_id} onChange={event => setImportForm(current => ({ ...current, job_id: event.target.value }))} disabled={importing} required autoFocus />
+          </label>
+          <label>
+            <span className="label">Source</span>
+            <select className="input" value={importForm.source} onChange={event => setImportForm(current => ({ ...current, source: event.target.value as 'historical' | 'imported' }))} disabled={importing}>
+              <option value="historical">Historical</option>
+              <option value="imported">Imported</option>
+            </select>
+          </label>
+          <label className="md:col-span-2">
+            <span className="label">Register URL <span className="font-normal text-slate-400">(optional)</span></span>
+            <input className="input" value={importForm.register_url} onChange={event => setImportForm(current => ({ ...current, register_url: event.target.value }))} disabled={importing} />
+          </label>
+          <label className="md:col-span-2">
+            <span className="label">Register file reference <span className="font-normal text-slate-400">(optional)</span></span>
+            <input className="input" value={importForm.register_file_reference} onChange={event => setImportForm(current => ({ ...current, register_file_reference: event.target.value }))} disabled={importing} />
+          </label>
+          <label className="md:col-span-2">
+            <span className="label">Release <span className="font-normal text-slate-400">(optional)</span></span>
+            <input className="input" value={importForm.deployed_release} onChange={event => setImportForm(current => ({ ...current, deployed_release: event.target.value }))} disabled={importing} placeholder="Release, if known" />
+          </label>
         </div>
-        <Button className="mt-4" tone="primary" loading={importing} onClick={submitImport}>Import record</Button>
-      </div>
+      </Modal>
     </>
   )
 }

@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react'
 import { api, ApiError } from '../lib/api'
 import type { ControlJobDetail } from '../lib/types'
 import { controlMessage, controlView, jobScreen, resumeAllowed, sectionLabel, shown, sourceLabel } from '../lib/controlPlaneState'
-import { Alert, Button, SectionHeader, StatusBadge } from '../components/ui'
+import { pickJobActivity } from '../lib/formatTime'
+import { ActivityMeta } from '../components/ActivityMeta'
+import { PageLoading } from '../components/loading'
+import { Alert, Button, PageBreadcrumbs, SectionHeader, StatusBadge } from '../components/ui'
 import { UsageSummaryPanel } from '../components/UsageSummary'
 
 export function ControlJobPage({
@@ -46,6 +49,7 @@ export function ControlJobPage({
   const job = detail?.job
   const readOnly = job ? jobScreen(job.source) === 'record' : false
   const canResume = job ? !readOnly && resumeAllowed(job) : false
+  const activity = job ? pickJobActivity(job) : null
 
   async function reopen() {
     if (!job) return
@@ -112,12 +116,20 @@ export function ControlJobPage({
   return (
     <>
       <SectionHeader
+        breadcrumbs={(
+          <PageBreadcrumbs items={[
+            { label: 'Projects', onClick: onBack },
+            { label: shown(job?.project_name) !== '—' ? shown(job?.project_name) : 'Project', onClick: onBack },
+            { label: 'Job record' },
+          ]} />
+        )}
         eyebrow="Control plane"
         title={shown(job?.project_name)}
         description={job ? `${job.job_id} · ${sourceLabel(job.source)}` : 'Job record'}
         actions={<Button tone="ghost" onClick={onBack}>Back to project</Button>}
       />
-      {view !== 'ready' && <Alert kind={view === 'error' ? 'danger' : 'warning'} title="Control plane">{warning || controlMessage(view)}</Alert>}
+      {view === 'loading' && <PageLoading label="Loading job record" />}
+      {view !== 'ready' && view !== 'loading' && <Alert kind={view === 'error' ? 'danger' : 'warning'} title="Control plane">{warning || controlMessage(view)}</Alert>}
       {notice && <div className="mb-4"><Alert kind="info" title="Job">{notice}</Alert></div>}
       {job && view === 'ready' && readOnly && (
         <div className="mb-4">
@@ -134,6 +146,14 @@ export function ControlJobPage({
                   <StatusBadge status={job.job_status || 'unknown'} />
                   <StatusBadge status={sourceLabel(job.source)} />
                 </div>
+                {activity && (
+                  <ActivityMeta
+                    className="mt-3"
+                    createdAt={activity.created}
+                    activityAt={activity.activity}
+                    activityLabel={activity.activityLabel}
+                  />
+                )}
               </div>
               <div className="flex flex-wrap gap-2">
                 {!readOnly && <Button tone="secondary" loading={action === 'reopen'} onClick={reopen}>Reopen</Button>}

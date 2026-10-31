@@ -1,28 +1,50 @@
 import { ArrowRight, ClipboardPaste, FolderCog, LockKeyhole, ShieldCheck } from 'lucide-react'
 import { useRef, useState } from 'react'
 import type { JobForm, JobState } from '../lib/types'
-import { Button, SectionHeader, Alert } from '../components/ui'
+import { Alert, Button, PageBreadcrumbs, SectionHeader } from '../components/ui'
 
 const initial: JobForm = { project: '', source_folder_id: '', spreadsheet_id: '', batch_size: 10, box: '' }
 
-export function NewJob({ onCreated, create, error, projectName = '' }: { onCreated: (job: JobState) => void; create: (form: JobForm) => Promise<JobState>; error?: string | null; projectName?: string }) {
-  const [form, setForm] = useState<JobForm>({ ...initial, project: projectName })
+export function NewJob({
+  onCreated,
+  create,
+  error,
+  projectName = '',
+  projectLocked = false,
+  onBackToProject,
+}: {
+  onCreated: (job: JobState) => void
+  create: (form: JobForm) => Promise<JobState>
+  error?: string | null
+  projectName?: string
+  projectLocked?: boolean
+  onBackToProject?: () => void
+}) {
+  const lockedName = projectLocked ? projectName.trim() : ''
+  const [form, setForm] = useState<JobForm>({ ...initial, project: lockedName || projectName })
   const [localError, setLocalError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const submittingRef = useRef(false)
-  const set = (key: keyof JobForm, value: string | number) => setForm(v => ({ ...v, [key]: value }))
+  const set = (key: keyof JobForm, value: string | number) => {
+    if (key === 'project' && lockedName) return
+    setForm(v => ({ ...v, [key]: value }))
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setLocalError('')
     if (submittingRef.current) return
-    if (!form.project.trim() || !form.source_folder_id.trim() || !form.spreadsheet_id.trim() || !form.box.trim()) {
+    const payload: JobForm = {
+      ...form,
+      project: lockedName || form.project,
+    }
+    if (!payload.project.trim() || !payload.source_folder_id.trim() || !payload.spreadsheet_id.trim() || !payload.box.trim()) {
       setLocalError('Project name, box label, Drive folder link or ID, and Production Register Sheets link or ID are required.')
       return
     }
     submittingRef.current = true
     setSubmitting(true)
-    try { onCreated(await create(form)) }
+    try { onCreated(await create(payload)) }
     catch { /* parent surfaces API error */ }
     finally { submittingRef.current = false; setSubmitting(false) }
   }
@@ -30,9 +52,19 @@ export function NewJob({ onCreated, create, error, projectName = '' }: { onCreat
   return (
     <>
       <SectionHeader
+        breadcrumbs={onBackToProject ? (
+          <PageBreadcrumbs items={[
+            { label: 'Projects', onClick: onBackToProject },
+            { label: lockedName || projectName || 'Project', onClick: onBackToProject },
+            { label: 'New job' },
+          ]} />
+        ) : (
+          <PageBreadcrumbs items={[{ label: 'New job' }]} />
+        )}
         eyebrow="Job"
         title="Create a new job"
         description="Authorize one Drive folder or parent box and a clean Developer Test / Production Register. A parent discovers every immediate F-folder child; an individual folder queues only itself. Inspection never starts here."
+        actions={onBackToProject ? <Button tone="ghost" onClick={onBackToProject}>Back to project</Button> : undefined}
       />
       <div className="grid gap-6 xl:grid-cols-[1.2fr_.8fr]">
         <form onSubmit={submit} className="surface p-6 sm:p-8">
@@ -47,7 +79,21 @@ export function NewJob({ onCreated, create, error, projectName = '' }: { onCreat
           <div className="grid gap-5 sm:grid-cols-2">
             <label className="sm:col-span-2">
               <span className="label">Project name</span>
-              <input className="input" value={form.project} onChange={e => set('project', e.target.value)} placeholder="Your client / collection name" disabled={submitting} />
+              {lockedName ? (
+                <>
+                  <input
+                    className="input bg-[#043845]/80 text-slate-200"
+                    value={lockedName}
+                    readOnly
+                    aria-readonly="true"
+                    title="Project is fixed for this create flow"
+                    disabled={submitting}
+                  />
+                  <span className="mt-1 block text-[11px] text-slate-500">Selected from the project page. The create-job payload still sends this project name.</span>
+                </>
+              ) : (
+                <input className="input" value={form.project} onChange={e => set('project', e.target.value)} placeholder="Your client / collection name" disabled={submitting} />
+              )}
             </label>
             <label className="sm:col-span-2">
               <span className="label">Google Drive folder link or ID</span>
