@@ -1,0 +1,86 @@
+{
+  "comparison_run_id": "compare-20261029T072738Z-0453f327",
+  "created_at": "2026-10-29T07:27:39.145814+00:00",
+  "authorization": "one replacement cache comparison only; general paid testing not resumed",
+  "build": {
+    "head": "feed5e223aa5eafde2843ca15f7bae634b30d03a",
+    "working_tree_fingerprint": "d5c9fe689643e5729b4ae12d98be718a47baed0ab9bfea77993ae6bd0cd50758"
+  },
+  "images": [
+    {
+      "path": "C:\\Users\\asa\\AppData\\Local\\Temp\\historyit_model_views\\004-model-input.jpg",
+      "source_filename": "TriDelta_Year2_Chapters_Box31_F04_004.jpg",
+      "pixels": "2048x1536",
+      "bytes": 883301,
+      "sha256": "63d2ada9ee6e1ab713bbe85a6c6a4ebf6cff364cb4b1b2a0a01b63de782ac015",
+      "mode": "original"
+    },
+    {
+      "path": "C:\\Users\\asa\\AppData\\Local\\Temp\\historyit_model_views\\002-model-input.jpg",
+      "source_filename": "TriDelta_Year2_Chapters_Box31_F04_002.jpg",
+      "pixels": "2048x1536",
+      "bytes": 1112925,
+      "sha256": "9fcea6bb3d55c057a63ec656e19aec57dd551ccfa1024c07d3a6cbac8f99f174",
+      "mode": "original"
+    },
+    {
+      "path": "C:\\Users\\asa\\AppData\\Local\\Temp\\historyit_model_views\\016b-model-input.jpg",
+      "source_filename": "TriDelta_Year2_Chapters_Box31_F04_Photograph_016b.jpg",
+      "pixels": "2048x1365",
+      "bytes": 461277,
+      "sha256": "e0e1c0a3bcd24743d94e8e6227961091276f460cb8c8e03433ce01c2b95bbeac",
+      "mode": "original"
+    }
+  ],
+  "plan": {
+    "max_generation_calls": 6,
+    "generation_reservation_cap_usd": "20",
+    "arm_order": [
+      "optimized",
+      "baseline"
+    ],
+    "calls_per_arm": 3,
+    "service_tier_pin": "default",
+    "quality": {
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "high",
+      "image_detail": "high",
+      "max_output_tokens": 60000
+    },
+    "retries": false,
+    "splitting": false,
+    "replacement_calls": false,
+    "register_writes": false,
+    "execution_command": "D:\\Integer\\HistoryIT\\history-it\\server\\.venv\\Scripts\\python.exe -m harness.cache_comparison --allow-paid-calls"
+  },
+  "count_endpoint_charges_documented": false,
+  "generation_cap_is_not_all_endpoint_guarantee": true,
+  "evidence_paths": {
+    "events": "D:\\Integer\\HistoryIT\\history-it\\server\\harness\\reports\\cache_comparison_events.jsonl",
+    "summary": "D:\\Integer\\HistoryIT\\history-it\\server\\harness\\reports\\cache_comparison_report.json"
+  },
+  "failed_prior_run": {
+    "identity": "failed-authorized-run-2026-10-26",
+    "terminal": "686459",
+    "started_at": "2026-10-26T13:12:55.397Z",
+    "ended_at": "2026-10-26T13:15:18.330Z",
+    "elapsed_ms": 142933,
+    "exit_code": 1,
+    "head": "feed5e223aa5eafde2843ca15f7bae634b30d03a",
+    "working_tree_fingerprint": "d997d6d1db4087325004670c807f5fbbcfb791f477cf8d874286e37599b5e29f",
+    "spend_usd": null,
+    "spend_status": "unknown",
+    "generation_call_count": null,
+    "generation_call_count_status": "unknown",
+    "request_records_persisted": false,
+    "request_records_cleared": false,
+    "request_records_reused": false,
+    "note": "Crashed while serializing InspectionOutput class. No events jsonl was written. Identity preserved; spend and call count remain unknown."
+  },
+  "offline_tests": {
+    "test_cache_comparison_harness.py": "15 passed"
+  },
+  "report_directory_writable": true,
+  "preexisting_events": false,
+  "preexisting_summary": false
+}

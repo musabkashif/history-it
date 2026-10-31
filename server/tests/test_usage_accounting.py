@@ -10,7 +10,7 @@ from app.adapters import SheetResizeError
 from app.models import ASSET_HEADERS, RECORD_HEADERS, AssetRow, InspectionOutput, RecordRow, Source
 from app.inspection import Inspector
 from app.orchestrator import Orchestrator
-from app.usage_accounting import parse_provider_usage, reconcile_usage, usage_cost
+from app.usage_accounting import parse_provider_usage, reconcile_usage, usage_categories_complete, usage_cost
 
 
 class Rates:
@@ -38,6 +38,70 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(record['cache_write_retention'], 'unknown')
         with self.assertRaisesRegex(Exception, 'retention was not returned'):
             usage_cost(record, Rates())
+
+    def test_nested_ttl_30m_details_are_named_retention_not_unscoped(self):
+        # Shape returned by compare-20261029T072738Z optimized warm-up.
+        record = _record(
+            input_tokens=17_199,
+            output_tokens=1_305,
+            input_tokens_details={
+                'cached_tokens': 0,
+                'cache_write_tokens': 12_713,
+                'cache_write_tokens_details': {
+                    'ttl_12h_tokens': 0,
+                    'ttl_30m_tokens': 12_713,
+                },
+            },
+        )
+        self.assertEqual(record['cache_write_retention'], '30m')
+        self.assertEqual(record['cache_write_30m_tokens'], 12_713)
+        self.assertEqual(record['cache_write_tokens'], '')
+        self.assertEqual(record['uncached_input_tokens'], 17_199 - 12_713)
+        self.assertTrue(usage_categories_complete(record))
+        rates = Rates()
+        self.assertEqual(usage_cost(record, rates), format(
+            (
+                Decimal(17_199 - 12_713) * Decimal(rates.openai_input_usd_per_million)
+                + Decimal(12_713) * Decimal(rates.openai_cache_write_30m_usd_per_million)
+                + Decimal(1_305) * Decimal(rates.openai_output_usd_per_million)
+            ) / Decimal(1_000_000),
+            'f',
+        ))
+
+    def test_unscoped_cache_write_without_ttl_details_stays_unknown(self):
+        record = _record(
+            input_tokens=17_199,
+            output_tokens=1_144,
+            input_tokens_details={'cached_tokens': 12_713, 'cache_write_tokens': 4_483},
+        )
+        self.assertEqual(record['cache_write_retention'], 'unknown')
+        self.assertEqual(record['cache_write_tokens'], 4_483)
+        self.assertEqual(record['cache_write_30m_tokens'], '')
+        self.assertFalse(usage_categories_complete(record))
+        with self.assertRaisesRegex(Exception, 'retention'):
+            usage_cost(record, Rates())
+
+    def test_missing_input_cached_or_output_rate_is_not_a_zero_cost(self):
+        class MissingInput(Rates):
+            openai_input_usd_per_million = 0
+
+        class MissingCached(Rates):
+            openai_cached_input_usd_per_million = 0
+
+        class MissingOutput(Rates):
+            openai_output_usd_per_million = 0
+
+        record = _record(input_tokens=100, output_tokens=10, input_tokens_details={'cached_tokens': 40, 'cache_write_tokens': 0})
+        for rates, name in ((MissingInput(), 'INPUT'), (MissingCached(), 'CACHED'), (MissingOutput(), 'OUTPUT')):
+            with self.assertRaisesRegex(Exception, name):
+                usage_cost(record, rates)
+        blank = _record(input_tokens=0, output_tokens=0, input_tokens_details={'cached_tokens': 0, 'cache_write_tokens': 0})
+        self.assertEqual(usage_cost(blank, MissingInput()), '0.000000')
+        long_context = _record(input_tokens=272_001, output_tokens=1, input_tokens_details={'cached_tokens': 0, 'cache_write_tokens': 0})
+        class SolRates(Rates):
+            openai_model = 'gpt-5.6-sol'
+        with self.assertRaisesRegex(Exception, '272,000'):
+            usage_cost(long_context, SolRates())
         named = _record(
             input_tokens=1_000_000,
             output_tokens=0,

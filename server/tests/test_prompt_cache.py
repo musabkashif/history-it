@@ -24,7 +24,7 @@ from app.prompt_cache import (
     prompt_cache_optimization_enabled,
     stable_message,
 )
-from app.usage_accounting import parse_provider_usage, usage_cost, UsageAccountingError
+from app.usage_accounting import parse_provider_usage, usage_categories_complete, usage_cost, UsageAccountingError
 
 
 class Rates:
@@ -144,7 +144,7 @@ class FlaggedRequestTests(unittest.TestCase):
             response_id='resp-flag', attempt=1, part=1, status='Received',
         )
         self.assertEqual(record['cache_write_retention'], 'unknown')
-        self.assertEqual(record['cache_write_tokens'], 900)
+        self.assertFalse(usage_categories_complete(record))
         with self.assertRaises(UsageAccountingError):
             usage_cost(record, Rates())
 
@@ -239,6 +239,7 @@ class AccountingTests(unittest.TestCase):
         )
         self.assertEqual(record['cache_write_retention'], 'unknown')
         self.assertEqual(record['cache_write_30m_tokens'], '')
+        self.assertFalse(usage_categories_complete(record))
         with self.assertRaises(UsageAccountingError):
             usage_cost(record, Rates())
 
@@ -248,12 +249,14 @@ class AccountingTests(unittest.TestCase):
             response_id='resp-30', attempt=1, part=1, status='Received',
         )
         self.assertEqual(named['cache_write_retention'], '30m')
+        self.assertTrue(usage_categories_complete(named))
         self.assertEqual(usage_cost(named, Rates()), '0.004740')
         day = parse_provider_usage(
             {'input_tokens': 1000, 'output_tokens': 10, 'input_tokens_details': {'cached_tokens': 0, 'cache_write_24h_tokens': 1000}},
             response_id='resp-24', attempt=1, part=1, status='Received',
         )
         self.assertEqual(day['cache_write_retention'], '24h')
+        self.assertFalse(usage_categories_complete(day))
         with self.assertRaises(UsageAccountingError):
             usage_cost(day, Rates())
 

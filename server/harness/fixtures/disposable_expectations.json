@@ -1,0 +1,58 @@
+{
+  "writes_client_registers": false,
+  "calibration_scope": {
+    "reference_file": "server/project_references/tri-delta-chapters-box31-f04-calibration.json",
+    "reference_id": "tri-delta-chapters-box31-f04-calibration",
+    "version": "2026-10-24.1",
+    "project": "Tri Delta Chapters",
+    "box": "Chapters Box 31",
+    "folder": "F04",
+    "not_an_executable_rule": true
+  },
+  "images": [
+    {
+      "path": "C:\\Users\\asa\\AppData\\Local\\Temp\\historyit_model_views\\004-model-input.jpg",
+      "source_filename": "TriDelta_Year2_Chapters_Box31_F04_004.jpg",
+      "pixels": "2048x1536",
+      "expected": {
+        "record_kind": "Metadata Only",
+        "template": "Metadata Only",
+        "production_tasks": "none"
+      }
+    },
+    {
+      "path": "C:\\Users\\asa\\AppData\\Local\\Temp\\historyit_model_views\\002-model-input.jpg",
+      "source_filename": "TriDelta_Year2_Chapters_Box31_F04_002.jpg",
+      "pixels": "2048x1536",
+      "expected": {
+        "record_kind": "Normal Odyssey",
+        "action": "Archival Border Crop"
+      }
+    },
+    {
+      "path": "C:\\Users\\asa\\AppData\\Local\\Temp\\historyit_model_views\\016b-model-input.jpg",
+      "source_filename": "TriDelta_Year2_Chapters_Box31_F04_Photograph_016b.jpg",
+      "pixels": "2048x1365",
+      "expected": {
+        "record_kind": "Normal Odyssey",
+        "action": "Rotate + Archival Border Crop",
+        "note_must_include": ["180"]
+      }
+    }
+  ],
+  "can_establish": [
+    "Schema-valid output for these three frames.",
+    "Each source filename is echoed once.",
+    "F04_004 is Metadata Only with no production task.",
+    "F04_002 requests an Archival Border Crop.",
+    "Photograph_016b requests Rotate and an Archival Border Crop, and the note includes 180."
+  ],
+  "requires_box_acceptance": [
+    "F04_004 and F04_005 stay one descriptive reference and its blank verso. F04_005 is not in the local views.",
+    "F04_003, F04_006, and F04_007, and Photograph_008 through Photograph_021 except the one 016b frame.",
+    "Attached-note, white physical border, and dark-edge notes.",
+    "A calibration mismatch stops the batch before commit.",
+    "The system-to-developer role change is safe for a whole box.",
+    "The cache change reduces cost."
+  ]
+}

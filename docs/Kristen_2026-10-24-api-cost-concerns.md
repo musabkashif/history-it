@@ -59,9 +59,21 @@ OpenAI billed about $214.80 for GPT-5.6 Sol on the staging key for 16–23 Oct 2
 
 ## Testing status
 
-Paid testing is paused by client request. Do not run model calls, retry jobs, or start a new inspection until this accounting gap is understood and Kristen agrees to resume.
+Paid testing is paused by client request. Do not run model calls, retry jobs, or start a new inspection until Kristen agrees to resume.
 
-## Investigation required
+## Status as of 26 Oct 2026
+
+- Staging `ee1f7d4` stores one usage event per response, before staging or commit. An unscoped `cache_write_tokens` count stays unknown. It is not priced as a 30-minute write. Named 30-minute and 12-hour categories can be estimated only when that category is returned and its rate is set. A computed dollar amount is an application estimate, not an OpenAI charge.
+- Historical import is complete and backfill is off. Staging has 47 read-only jobs and 512 usage rows. Proven cost is null. Google Sheets was not rewritten. Her export of 429 requests and about $214.80 has not been reconciled to these rows.
+- Deployed cache-write rates are still 0. A positive token count with a 0 rate stays unknown, not $0.
+- A later local accounting change is not deployed. It keeps input above 272,000 tokens unknown, because the configured rates are the short-context card, and it records a timeout as `usage_outcome_unknown` with billed null.
+- Explicit 30-minute prompt caching is local, uncommitted, and not deployed. One authorized replacement comparison (`compare-20261029T072738Z-0453f327`) completed offline: cache reuse observed, three quality fixtures passed, savings **inconclusive**, baseline warm-up contaminated. Do not claim a percentage reduction. See `docs/CACHE_ACCOUNTING_DECISION.md` and `docs/API_COST_OPTIMIZATION.md`. Staging stays on the system-role request format (`0f5fe59`).
+- Job, project, and workspace views on staging show the estimate, unknown usage, and billing reconciliation pending. Live ingestion is on. Shadow writes stay off.
+- Production `4bbf3d7` does not have this accounting. Production was not changed.
+
+## Investigation checklist
+
+The status section above is the current result. Reconciliation to her OpenAI export is still open. The other items were traced in code and in `docs/API_COST_OPTIMIZATION.md`.
 
 - Actual usage fields returned by the OpenAI API, including any cache-write fields beyond total input and cached-read tokens.
 - Cache-write and cached-read pricing, including the 30-minute cache-write rate versus ordinary input.

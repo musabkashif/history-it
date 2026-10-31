@@ -795,7 +795,7 @@ class Inspector:
                 reasoning_effort=effort or None,
             )
             response = self._call(job, batch, attempt, 'responses.parse', lambda: self.client.responses.parse(**request))
-            from app.usage_accounting import parse_provider_usage, UsageAccountingError, usage_cost
+            from app.usage_accounting import parse_provider_usage
             part = _next_part(context if isinstance(context, dict) else {})
             response_meta = parse_provider_usage(
                 getattr(response, 'usage', None),
@@ -812,11 +812,16 @@ class Inspector:
             response_meta[FLAG_NAME] = optimized
             response_meta['request_shape'] = cache['request_shape']
             output = response.output_parsed
+            from app.usage_accounting import UsageAccountingError, usage_categories_complete, usage_cost
+            categories_complete = usage_categories_complete(response_meta)
             cost_complete = False
-            try:
-                response_meta['estimated_cost_usd'] = usage_cost(response_meta, self.settings)
-                cost_complete = True
-            except UsageAccountingError:
+            if categories_complete:
+                try:
+                    response_meta['estimated_cost_usd'] = usage_cost(response_meta, self.settings)
+                    cost_complete = True
+                except UsageAccountingError:
+                    cost_complete = False
+            if 'estimated_cost_usd' not in response_meta:
                 response_meta['estimated_cost_usd'] = ''
             self.diagnostics.write(
                 job, batch, attempt, 'response_received', **{
@@ -826,6 +831,7 @@ class Inspector:
                 requested_cache_mode=cache['cache_mode'],
                 requested_cache_ttl=cache['cache_ttl'],
                 prompt_fingerprint=cache['prompt_fingerprint'],
+                usage_categories_complete=categories_complete,
                 cost_complete=cost_complete,
                 cost_basis='application_estimate' if cost_complete else 'unknown',
                 returned_asset_filenames=[a.digital_asset for a in output.assets] if output else [],

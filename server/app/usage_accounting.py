@@ -29,6 +29,8 @@ Configured rates, per million tokens:
 - OPENAI_OUTPUT_USD_PER_MILLION for output
 
 A missing cache-write rate does not fall back to the ordinary input rate.
+Requesting a cache TTL does not name the retention of cache_write_tokens.
+That count stays unknown unless the response itself names 30m, 12h, or 24h.
 """
 from __future__ import annotations
 
@@ -145,6 +147,9 @@ def parse_provider_usage(usage, *, response_id: str, attempt: int, part: int, st
         return record
     raw = _mapping(usage)
     details = _mapping(raw.get('input_tokens_details'))
+    write_details = _mapping(details.get('cache_write_tokens_details'))
+    if not write_details:
+        write_details = _mapping(raw.get('cache_write_tokens_details'))
     input_tokens = _whole(_present(raw, ('input_tokens',)))
     output_tokens = _whole(_present(raw, ('output_tokens',)))
     cached = _present(details, ('cached_tokens',))
@@ -153,26 +158,54 @@ def parse_provider_usage(usage, *, response_id: str, attempt: int, part: int, st
     write_30 = _present(details, _WRITE_30_KEYS)
     if write_30 is None:
         write_30 = _present(raw, _WRITE_30_KEYS)
+    if write_30 is None:
+        write_30 = _present(write_details, ('ttl_30m_tokens', 'cache_write_30m_tokens', 'thirty_minute_cache_write_tokens'))
     write_12 = _present(details, ('cache_write_12h_tokens', 'cache_write_tokens_12h', 'twelve_hour_cache_write_tokens'))
     if write_12 is None:
         write_12 = _present(raw, ('cache_write_12h_tokens', 'cache_write_tokens_12h', 'twelve_hour_cache_write_tokens'))
+    if write_12 is None:
+        write_12 = _present(write_details, ('ttl_12h_tokens', 'cache_write_12h_tokens', 'twelve_hour_cache_write_tokens'))
     write_24 = _present(details, _WRITE_24_KEYS)
     if write_24 is None:
         write_24 = _present(raw, _WRITE_24_KEYS)
+    if write_24 is None:
+        write_24 = _present(write_details, ('ttl_24h_tokens', 'cache_write_24h_tokens'))
     generic = _present(details, ('cache_write_tokens',))
     if generic is None:
         generic = _present(raw, ('cache_write_tokens',))
-    named = [value is not None for value in (write_30, write_12, write_24)]
-    if not any(named):
+    # Named TTLs under cache_write_tokens_details are provider-reported retention.
+    # Providers often return every TTL key with zeros; only positive counts name the write.
+    named_present = any(value is not None for value in (write_30, write_12, write_24))
+    positive = [
+        name for name, value in (('30m', write_30), ('12h', write_12), ('24h', write_24))
+        if value not in (None, 0)
+    ]
+    if not named_present or (not positive and (generic in (None, 0))):
+        if not named_present:
+            retention = 'unknown'
+            unscoped = '' if generic is None else generic
+            write_30_out = ''
+            write_12_out = ''
+            write_24_out = ''
+            accounted = None if unscoped == '' else cached + int(unscoped)
+        else:
+            # TTL fields were present but empty, and there is no unscoped write.
+            retention = 'none'
+            unscoped = ''
+            write_30_out = 0 if write_30 is None else write_30
+            write_12_out = 0 if write_12 is None else write_12
+            write_24_out = 0 if write_24 is None else write_24
+            accounted = cached + _whole(write_30_out) + _whole(write_12_out) + _whole(write_24_out)
+    elif not positive and generic not in (None, 0):
+        # Nested TTL keys are all zero while an unscoped write remains. Keep unknown.
         retention = 'unknown'
-        unscoped = '' if generic is None else generic
+        unscoped = generic
         write_30_out = ''
         write_12_out = ''
         write_24_out = ''
-        accounted = None if unscoped == '' else cached + int(unscoped)
+        accounted = cached + int(unscoped)
     else:
-        labels = [name for name, present in (('30m', write_30 is not None), ('12h', write_12 is not None), ('24h', write_24 is not None)) if present]
-        retention = labels[0] if len(labels) == 1 else 'mixed'
+        retention = positive[0] if len(positive) == 1 else 'mixed'
         unscoped = ''
         write_30_out = 0 if write_30 is None else write_30
         write_12_out = 0 if write_12 is None else write_12
@@ -210,6 +243,20 @@ def _rate(settings, name: str) -> Decimal:
     return Decimal(str(getattr(settings, name, 0) or 0))
 
 
+def usage_categories_complete(record: dict) -> bool:
+    """True when every returned category can be priced. This is not an invoice."""
+    if record.get('usage_identity_gap') or record.get('uncached_input_tokens') == '':
+        return False
+    retention = str(record.get('cache_write_retention') or '')
+    unscoped = record.get('cache_write_tokens')
+    write_24 = record.get('cache_write_24h_tokens')
+    if retention == 'unknown' and unscoped not in (None, '', 0):
+        return False
+    if retention in {'24h', 'mixed'} or write_24 not in (None, '', 0):
+        return False
+    return True
+
+
 def usage_cost(record: dict, settings) -> str:
     """Price each named category. An unnamed cache write has no estimate."""
     if record.get('usage_identity_gap') or record.get('uncached_input_tokens') == '':
@@ -229,12 +276,26 @@ def usage_cost(record: dict, settings) -> str:
         raise UsageAccountingError('Set OPENAI_CACHE_WRITE_30M_USD_PER_MILLION. Cache writes are not priced as ordinary input.')
     if write_12 and rate_12 == 0:
         raise UsageAccountingError('Set OPENAI_CACHE_WRITE_12H_USD_PER_MILLION. Cache writes are not priced as ordinary input.')
+    uncached = _whole(record.get('uncached_input_tokens'))
+    cached = _whole(record.get('cached_input_tokens'))
+    output = _whole(record.get('output_tokens'))
+    rate_input = _rate(settings, 'openai_input_usd_per_million')
+    rate_cached = _rate(settings, 'openai_cached_input_usd_per_million')
+    rate_output = _rate(settings, 'openai_output_usd_per_million')
+    if uncached and rate_input == 0:
+        raise UsageAccountingError('Set OPENAI_INPUT_USD_PER_MILLION. A missing rate is not a $0 cost. The cost is unknown.')
+    if cached and rate_cached == 0:
+        raise UsageAccountingError('Set OPENAI_CACHED_INPUT_USD_PER_MILLION. A missing rate is not a $0 cost. The cost is unknown.')
+    if output and rate_output == 0:
+        raise UsageAccountingError('Set OPENAI_OUTPUT_USD_PER_MILLION. A missing rate is not a $0 cost. The cost is unknown.')
+    if str(getattr(settings, 'openai_model', '') or '') == 'gpt-5.6-sol' and _whole(record.get('input_tokens')) > 272_000:
+        raise UsageAccountingError('Input is above 272,000 tokens. The configured rates are the short-context card for gpt-5.6-sol. The cost is unknown.')
     total = (
-        Decimal(_whole(record.get('uncached_input_tokens'))) * _rate(settings, 'openai_input_usd_per_million')
-        + Decimal(_whole(record.get('cached_input_tokens'))) * _rate(settings, 'openai_cached_input_usd_per_million')
+        Decimal(uncached) * rate_input
+        + Decimal(cached) * rate_cached
         + Decimal(write_30) * rate_30
         + Decimal(write_12) * rate_12
-        + Decimal(_whole(record.get('output_tokens'))) * _rate(settings, 'openai_output_usd_per_million')
+        + Decimal(output) * rate_output
     ) / _MILLION
     return format(total.quantize(_MONEY, rounding=ROUND_HALF_UP), 'f')
 

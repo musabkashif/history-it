@@ -1,0 +1,2712 @@
+{
+  "build": {
+    "head": "feed5e223aa5eafde2843ca15f7bae634b30d03a",
+    "working_tree_fingerprint": "b01c569d413992db1ab12cf5955f45f5519b3272a5b37d83c3a795b20f77859c"
+  },
+  "run_id": "clean-20261029T180136Z-9781941e",
+  "staging_commit_unchanged": "0f5fe59e8b359809b75c31663243c0a4a54dc641",
+  "isolation_method": "prompt_cache_key per arm under fresh run id",
+  "prompt_cache_keys": {
+    "optimized": "hitcc-o-6976ee6a024872d005f699bcd3afd9390febbbc6",
+    "baseline": "hitcc-b-dcd56a9f2ee5dd59a0726a03688f4c7fa730f542"
+  },
+  "pricing_inputs": {
+    "label": "application_estimate_not_invoice_charge",
+    "basis": "OpenAI Standard rate card for gpt-5.6-sol short context (<=272k input), copied for this comparison only",
+    "currency": "USD",
+    "per_million_tokens": {
+      "uncached_input": "4",
+      "cached_input": "0.40",
+      "output": "20",
+      "cache_write_30m": "5",
+      "cache_write_12h": "10"
+    },
+    "unscoped_cache_write": "never_priced_as_application_estimate"
+  },
+  "acceptance_rule": "Pass only when all three quality outcomes pass in both arms; baseline and optimized warm-ups are uncontaminated; optimized follow-ups show cache reads; optimized total application-estimate cost is lower than baseline; and that difference is larger than documented uncertainty (overlapping estimate/bound ranges or any unknown estimate). Otherwise the result is inconclusive.",
+  "failed_26_oct_run": {
+    "date": "2026-10-26",
+    "status": "unknown_evidence",
+    "reuse": false,
+    "note": "Failed while saving the summary; no events jsonl and no response IDs. Spend and generation-call count remain unknown. Do not reuse as comparison evidence."
+  },
+  "prior_contaminated_run": {
+    "id": "compare-20261029T072738Z-0453f327",
+    "reuse": false,
+    "note": "Baseline warm-up was contaminated. Keep as historical evidence only."
+  },
+  "incomplete_clean_run": {
+    "id": "clean-20261029T174759Z-d99cf263",
+    "status": "incomplete_unknown_outcome",
+    "reuse": false,
+    "note": "Stopped on the first generation call: prompt_cache_key exceeded the API 64-character limit (71/70). No usage returned; quality and savings unknown. Do not reuse its records."
+  },
+  "images": [
+    {
+      "path": "C:\\Users\\asa\\AppData\\Local\\Temp\\historyit_model_views\\004-model-input.jpg",
+      "source_filename": "TriDelta_Year2_Chapters_Box31_F04_004.jpg",
+      "pixels": "2048x1536",
+      "bytes": 883301,
+      "sha256": "63d2ada9ee6e1ab713bbe85a6c6a4ebf6cff364cb4b1b2a0a01b63de782ac015",
+      "mode": "original"
+    },
+    {
+      "path": "C:\\Users\\asa\\AppData\\Local\\Temp\\historyit_model_views\\002-model-input.jpg",
+      "source_filename": "TriDelta_Year2_Chapters_Box31_F04_002.jpg",
+      "pixels": "2048x1536",
+      "bytes": 1112925,
+      "sha256": "9fcea6bb3d55c057a63ec656e19aec57dd551ccfa1024c07d3a6cbac8f99f174",
+      "mode": "original"
+    },
+    {
+      "path": "C:\\Users\\asa\\AppData\\Local\\Temp\\historyit_model_views\\016b-model-input.jpg",
+      "source_filename": "TriDelta_Year2_Chapters_Box31_F04_Photograph_016b.jpg",
+      "pixels": "2048x1365",
+      "bytes": 461277,
+      "sha256": "e0e1c0a3bcd24743d94e8e6227961091276f460cb8c8e03433ce01c2b95bbeac",
+      "mode": "original"
+    }
+  ],
+  "arm_order": [
+    "optimized",
+    "optimized",
+    "optimized",
+    "baseline",
+    "baseline",
+    "baseline"
+  ],
+  "count_charges_documented": false,
+  "generation_calls_sent": 6,
+  "generation_calls_with_usage": 6,
+  "stop_reason": "",
+  "writes_registers": false,
+  "steps": [
+    {
+      "order": 1,
+      "arm": "optimized",
+      "warm_up": true,
+      "included_in_arm_total": true,
+      "source_filename": "TriDelta_Year2_Chapters_Box31_F04_004.jpg",
+      "governing_fingerprint": "a8c93ec4495ef726ced9f245b9cb3a262a5d1ed34658470b5bdf77ceebf9d693",
+      "run_id": "clean-20261029T180136Z-9781941e",
+      "prompt_cache_key": "hitcc-o-6976ee6a024872d005f699bcd3afd9390febbbc6",
+      "input_tokens": 17199,
+      "reservation_usd": "1.37199",
+      "service_tier_sent": "default",
+      "request": {
+        "model": "gpt-5.6-sol",
+        "text_format": {
+          "schema_name": "InspectionOutput",
+          "schema_module": "app.models",
+          "json_schema": {
+            "$defs": {
+              "AssetRow": {
+                "additionalProperties": false,
+                "properties": {
+                  "Project": {
+                    "title": "Project",
+                    "type": "string"
+                  },
+                  "Job ID": {
+                    "title": "Job Id",
+                    "type": "string"
+                  },
+                  "Batch ID": {
+                    "title": "Batch Id",
+                    "type": "string"
+                  },
+                  "Processing Unit / Source Folder": {
+                    "title": "Processing Unit / Source Folder",
+                    "type": "string"
+                  },
+                  "Asset Sequence": {
+                    "title": "Asset Sequence",
+                    "type": "string"
+                  },
+                  "Digital Asset": {
+                    "title": "Digital Asset",
+                    "type": "string"
+                  },
+                  "Box": {
+                    "title": "Box",
+                    "type": "string"
+                  },
+                  "Source Group / Folder": {
+                    "title": "Source Group / Folder",
+                    "type": "string"
+                  },
+                  "Assigned Record ID": {
+                    "title": "Assigned Record Id",
+                    "type": "string"
+                  },
+                  "Asset Role": {
+                    "title": "Asset Role",
+                    "type": "string"
+                  },
+                  "Required Crop Standard": {
+                    "title": "Required Crop Standard",
+                    "type": "string"
+                  },
+                  "QC Status": {
+                    "title": "Qc Status",
+                    "type": "string"
+                  },
+                  "Action Needed": {
+                    "title": "Action Needed",
+                    "type": "string"
+                  },
+                  "Expected Output Asset Count": {
+                    "title": "Expected Output Asset Count",
+                    "type": "string"
+                  },
+                  "QC Confidence": {
+                    "title": "Qc Confidence",
+                    "type": "string"
+                  },
+                  "QC Note": {
+                    "title": "Qc Note",
+                    "type": "string"
+                  },
+                  "Odyssey Ingest / Visibility Note": {
+                    "title": "Odyssey Ingest / Visibility Note",
+                    "type": "string"
+                  },
+                  "Production Queue Eligible": {
+                    "title": "Production Queue Eligible",
+                    "type": "string"
+                  },
+                  "Production Task Scope": {
+                    "title": "Production Task Scope",
+                    "type": "string"
+                  },
+                  "Production Task Note": {
+                    "title": "Production Task Note",
+                    "type": "string"
+                  },
+                  "Exception / Duplicate Note": {
+                    "title": "Exception / Duplicate Note",
+                    "type": "string"
+                  },
+                  "Inspection Complete": {
+                    "title": "Inspection Complete",
+                    "type": "string"
+                  },
+                  "Commit Status": {
+                    "title": "Commit Status",
+                    "type": "string"
+                  },
+                  "Commit Note": {
+                    "title": "Commit Note",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "Project",
+                  "Job ID",
+                  "Batch ID",
+                  "Processing Unit / Source Folder",
+                  "Asset Sequence",
+                  "Digital Asset",
+                  "Box",
+                  "Source Group / Folder",
+                  "Assigned Record ID",
+                  "Asset Role",
+                  "Required Crop Standard",
+                  "QC Status",
+                  "Action Needed",
+                  "Expected Output Asset Count",
+                  "QC Confidence",
+                  "QC Note",
+                  "Odyssey Ingest / Visibility Note",
+                  "Production Queue Eligible",
+                  "Production Task Scope",
+                  "Production Task Note",
+                  "Exception / Duplicate Note",
+                  "Inspection Complete",
+                  "Commit Status",
+                  "Commit Note"
+                ],
+                "title": "AssetRow",
+                "type": "object"
+              },
+              "RecordRow": {
+                "additionalProperties": false,
+                "properties": {
+                  "Project": {
+                    "title": "Project",
+                    "type": "string"
+                  },
+                  "Job ID": {
+                    "title": "Job Id",
+                    "type": "string"
+                  },
+                  "Batch ID": {
+                    "title": "Batch Id",
+                    "type": "string"
+                  },
+                  "Processing Unit / Source Folder": {
+                    "title": "Processing Unit / Source Folder",
+                    "type": "string"
+                  },
+                  "Record Sequence": {
+                    "title": "Record Sequence",
+                    "type": "string"
+                  },
+                  "Proposed Record ID": {
+                    "title": "Proposed Record Id",
+                    "type": "string"
+                  },
+                  "Record Kind": {
+                    "title": "Record Kind",
+                    "type": "string"
+                  },
+                  "Record Operation": {
+                    "title": "Record Operation",
+                    "type": "string"
+                  },
+                  "Box": {
+                    "title": "Box",
+                    "type": "string"
+                  },
+                  "Source Group / Folder": {
+                    "title": "Source Group / Folder",
+                    "type": "string"
+                  },
+                  "Parent Scrapbook": {
+                    "title": "Parent Scrapbook",
+                    "type": "string"
+                  },
+                  "Parent Scrapbook Page": {
+                    "title": "Parent Scrapbook Page",
+                    "type": "string"
+                  },
+                  "New Batch Assets": {
+                    "title": "New Batch Assets",
+                    "type": "string"
+                  },
+                  "Existing Committed Assets": {
+                    "title": "Existing Committed Assets",
+                    "type": "string"
+                  },
+                  "Full Record Assets After Commit": {
+                    "title": "Full Record Assets After Commit",
+                    "type": "string"
+                  },
+                  "Digital Asset Count": {
+                    "title": "Digital Asset Count",
+                    "type": "string"
+                  },
+                  "Logical Component Count": {
+                    "title": "Logical Component Count",
+                    "type": "string"
+                  },
+                  "Template": {
+                    "title": "Template",
+                    "type": "string"
+                  },
+                  "Type": {
+                    "title": "Type",
+                    "type": "string"
+                  },
+                  "Reference Role": {
+                    "title": "Reference Role",
+                    "type": "string"
+                  },
+                  "Further Detail": {
+                    "title": "Further Detail",
+                    "type": "string"
+                  },
+                  "Required Crop Standard": {
+                    "title": "Required Crop Standard",
+                    "type": "string"
+                  },
+                  "Record QC Status": {
+                    "title": "Record Qc Status",
+                    "type": "string"
+                  },
+                  "Record Action Needed": {
+                    "title": "Record Action Needed",
+                    "type": "string"
+                  },
+                  "Metadata Readiness": {
+                    "title": "Metadata Readiness",
+                    "type": "string"
+                  },
+                  "Confidence": {
+                    "title": "Confidence",
+                    "type": "string"
+                  },
+                  "Review Note": {
+                    "title": "Review Note",
+                    "type": "string"
+                  },
+                  "Production Task Count": {
+                    "title": "Production Task Count",
+                    "type": "string"
+                  },
+                  "Odyssey Ingest / Visibility Note": {
+                    "title": "Odyssey Ingest / Visibility Note",
+                    "type": "string"
+                  },
+                  "Notes": {
+                    "title": "Notes",
+                    "type": "string"
+                  },
+                  "Boundary State After Record": {
+                    "title": "Boundary State After Record",
+                    "type": "string"
+                  },
+                  "Inspection Complete": {
+                    "title": "Inspection Complete",
+                    "type": "string"
+                  },
+                  "Commit Status": {
+                    "title": "Commit Status",
+                    "type": "string"
+                  },
+                  "Commit Note": {
+                    "title": "Commit Note",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "Project",
+                  "Job ID",
+                  "Batch ID",
+                  "Processing Unit / Source Folder",
+                  "Record Sequence",
+                  "Proposed Record ID",
+                  "Record Kind",
+                  "Record Operation",
+                  "Box",
+                  "Source Group / Folder",
+                  "Parent Scrapbook",
+                  "Parent Scrapbook Page",
+                  "New Batch Assets",
+                  "Existing Committed Assets",
+                  "Full Record Assets After Commit",
+                  "Digital Asset Count",
+                  "Logical Component Count",
+                  "Template",
+                  "Type",
+                  "Reference Role",
+                  "Further Detail",
+                  "Required Crop Standard",
+                  "Record QC Status",
+                  "Record Action Needed",
+                  "Metadata Readiness",
+                  "Confidence",
+                  "Review Note",
+                  "Production Task Count",
+                  "Odyssey Ingest / Visibility Note",
+                  "Notes",
+                  "Boundary State After Record",
+                  "Inspection Complete",
+                  "Commit Status",
+                  "Commit Note"
+                ],
+                "title": "RecordRow",
+                "type": "object"
+              }
+            },
+            "additionalProperties": false,
+            "properties": {
+              "assets": {
+                "items": {
+                  "$ref": "#/$defs/AssetRow"
+                },
+                "title": "Assets",
+                "type": "array"
+              },
+              "records": {
+                "items": {
+                  "$ref": "#/$defs/RecordRow"
+                },
+                "title": "Records",
+                "type": "array"
+              }
+            },
+            "required": [
+              "assets",
+              "records"
+            ],
+            "title": "InspectionOutput",
+            "type": "object"
+          }
+        },
+        "max_output_tokens": 60000,
+        "reasoning": {
+          "effort": "high"
+        },
+        "prompt_cache_options": {
+          "mode": "explicit",
+          "ttl": "30m"
+        },
+        "prompt_cache_key": "hitcc-o-6976ee6a024872d005f699bcd3afd9390febbbc6",
+        "service_tier": "default",
+        "input_roles": [
+          "developer",
+          "user"
+        ]
+      },
+      "observation": {
+        "started_at": "2026-10-29T18:02:10.308538+00:00",
+        "completed_at": "2026-10-29T18:02:28.894735+00:00",
+        "response_id": "resp_06121e33107f32bd006ae38a264c2087d1851978d821df5fb2",
+        "service_tier": "default",
+        "usage": {
+          "input_tokens": 17199,
+          "input_tokens_details": {
+            "cache_write_tokens": 12713,
+            "cached_tokens": 0,
+            "cache_write_tokens_details": {
+              "ttl_12h_tokens": 0,
+              "ttl_30m_tokens": 12713
+            }
+          },
+          "output_tokens": 1036,
+          "output_tokens_details": {
+            "reasoning_tokens": 516
+          },
+          "total_tokens": 18235
+        },
+        "parsed_usage": {
+          "uncached_input_tokens": 4486,
+          "cached_input_tokens": 0,
+          "cache_write_30m_tokens": 12713,
+          "cache_write_12h_tokens": 0,
+          "cache_write_tokens": "",
+          "cache_write_retention": "30m",
+          "output_tokens": 1036,
+          "input_tokens": 17199
+        },
+        "contamination": null,
+        "cache_state": "cache_write_or_miss",
+        "application_estimate_usd": "0.102229",
+        "conservative_bound_usd": "0.102229",
+        "cost_known": true,
+        "cost_basis": "application_estimate_not_invoice_charge",
+        "attempt": 1,
+        "status": "Received",
+        "failure_reason": null,
+        "billed": true,
+        "pricing_inputs": {
+          "label": "application_estimate_not_invoice_charge",
+          "basis": "OpenAI Standard rate card for gpt-5.6-sol short context (<=272k input), copied for this comparison only",
+          "currency": "USD",
+          "per_million_tokens": {
+            "uncached_input": "4",
+            "cached_input": "0.40",
+            "output": "20",
+            "cache_write_30m": "5",
+            "cache_write_12h": "10"
+          },
+          "unscoped_cache_write": "never_priced_as_application_estimate"
+        }
+      },
+      "quality": {
+        "pass": true,
+        "problems": [],
+        "extracted": {
+          "filename_count": 1,
+          "record_kind": "Metadata Only",
+          "template": "Metadata Only",
+          "action_needed": "N/A",
+          "notes": "Descriptive reference sheet supporting surrounding collection material; no production adjustment required. N/A N/A The inspected image is the front of a descriptive reference sheet. Folder-specific calibration identifies F04_005 as its blank verso, so this physical reference remains open pending that separately authorized asset. Only the authorized front image is staged in this batch."
+        }
+      }
+    },
+    {
+      "order": 2,
+      "arm": "optimized",
+      "warm_up": false,
+      "included_in_arm_total": true,
+      "source_filename": "TriDelta_Year2_Chapters_Box31_F04_002.jpg",
+      "governing_fingerprint": "a8c93ec4495ef726ced9f245b9cb3a262a5d1ed34658470b5bdf77ceebf9d693",
+      "run_id": "clean-20261029T180136Z-9781941e",
+      "prompt_cache_key": "hitcc-o-6976ee6a024872d005f699bcd3afd9390febbbc6",
+      "input_tokens": 17199,
+      "reservation_usd": "1.37199",
+      "service_tier_sent": "default",
+      "request": {
+        "model": "gpt-5.6-sol",
+        "text_format": {
+          "schema_name": "InspectionOutput",
+          "schema_module": "app.models",
+          "json_schema": {
+            "$defs": {
+              "AssetRow": {
+                "additionalProperties": false,
+                "properties": {
+                  "Project": {
+                    "title": "Project",
+                    "type": "string"
+                  },
+                  "Job ID": {
+                    "title": "Job Id",
+                    "type": "string"
+                  },
+                  "Batch ID": {
+                    "title": "Batch Id",
+                    "type": "string"
+                  },
+                  "Processing Unit / Source Folder": {
+                    "title": "Processing Unit / Source Folder",
+                    "type": "string"
+                  },
+                  "Asset Sequence": {
+                    "title": "Asset Sequence",
+                    "type": "string"
+                  },
+                  "Digital Asset": {
+                    "title": "Digital Asset",
+                    "type": "string"
+                  },
+                  "Box": {
+                    "title": "Box",
+                    "type": "string"
+                  },
+                  "Source Group / Folder": {
+                    "title": "Source Group / Folder",
+                    "type": "string"
+                  },
+                  "Assigned Record ID": {
+                    "title": "Assigned Record Id",
+                    "type": "string"
+                  },
+                  "Asset Role": {
+                    "title": "Asset Role",
+                    "type": "string"
+                  },
+                  "Required Crop Standard": {
+                    "title": "Required Crop Standard",
+                    "type": "string"
+                  },
+                  "QC Status": {
+                    "title": "Qc Status",
+                    "type": "string"
+                  },
+                  "Action Needed": {
+                    "title": "Action Needed",
+                    "type": "string"
+                  },
+                  "Expected Output Asset Count": {
+                    "title": "Expected Output Asset Count",
+                    "type": "string"
+                  },
+                  "QC Confidence": {
+                    "title": "Qc Confidence",
+                    "type": "string"
+                  },
+                  "QC Note": {
+                    "title": "Qc Note",
+                    "type": "string"
+                  },
+                  "Odyssey Ingest / Visibility Note": {
+                    "title": "Odyssey Ingest / Visibility Note",
+                    "type": "string"
+                  },
+                  "Production Queue Eligible": {
+                    "title": "Production Queue Eligible",
+                    "type": "string"
+                  },
+                  "Production Task Scope": {
+                    "title": "Production Task Scope",
+                    "type": "string"
+                  },
+                  "Production Task Note": {
+                    "title": "Production Task Note",
+                    "type": "string"
+                  },
+                  "Exception / Duplicate Note": {
+                    "title": "Exception / Duplicate Note",
+                    "type": "string"
+                  },
+                  "Inspection Complete": {
+                    "title": "Inspection Complete",
+                    "type": "string"
+                  },
+                  "Commit Status": {
+                    "title": "Commit Status",
+                    "type": "string"
+                  },
+                  "Commit Note": {
+                    "title": "Commit Note",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "Project",
+                  "Job ID",
+                  "Batch ID",
+                  "Processing Unit / Source Folder",
+                  "Asset Sequence",
+                  "Digital Asset",
+                  "Box",
+                  "Source Group / Folder",
+                  "Assigned Record ID",
+                  "Asset Role",
+                  "Required Crop Standard",
+                  "QC Status",
+                  "Action Needed",
+                  "Expected Output Asset Count",
+                  "QC Confidence",
+                  "QC Note",
+                  "Odyssey Ingest / Visibility Note",
+                  "Production Queue Eligible",
+                  "Production Task Scope",
+                  "Production Task Note",
+                  "Exception / Duplicate Note",
+                  "Inspection Complete",
+                  "Commit Status",
+                  "Commit Note"
+                ],
+                "title": "AssetRow",
+                "type": "object"
+              },
+              "RecordRow": {
+                "additionalProperties": false,
+                "properties": {
+                  "Project": {
+                    "title": "Project",
+                    "type": "string"
+                  },
+                  "Job ID": {
+                    "title": "Job Id",
+                    "type": "string"
+                  },
+                  "Batch ID": {
+                    "title": "Batch Id",
+                    "type": "string"
+                  },
+                  "Processing Unit / Source Folder": {
+                    "title": "Processing Unit / Source Folder",
+                    "type": "string"
+                  },
+                  "Record Sequence": {
+                    "title": "Record Sequence",
+                    "type": "string"
+                  },
+                  "Proposed Record ID": {
+                    "title": "Proposed Record Id",
+                    "type": "string"
+                  },
+                  "Record Kind": {
+                    "title": "Record Kind",
+                    "type": "string"
+                  },
+                  "Record Operation": {
+                    "title": "Record Operation",
+                    "type": "string"
+                  },
+                  "Box": {
+                    "title": "Box",
+                    "type": "string"
+                  },
+                  "Source Group / Folder": {
+                    "title": "Source Group / Folder",
+                    "type": "string"
+                  },
+                  "Parent Scrapbook": {
+                    "title": "Parent Scrapbook",
+                    "type": "string"
+                  },
+                  "Parent Scrapbook Page": {
+                    "title": "Parent Scrapbook Page",
+                    "type": "string"
+                  },
+                  "New Batch Assets": {
+                    "title": "New Batch Assets",
+                    "type": "string"
+                  },
+                  "Existing Committed Assets": {
+                    "title": "Existing Committed Assets",
+                    "type": "string"
+                  },
+                  "Full Record Assets After Commit": {
+                    "title": "Full Record Assets After Commit",
+                    "type": "string"
+                  },
+                  "Digital Asset Count": {
+                    "title": "Digital Asset Count",
+                    "type": "string"
+                  },
+                  "Logical Component Count": {
+                    "title": "Logical Component Count",
+                    "type": "string"
+                  },
+                  "Template": {
+                    "title": "Template",
+                    "type": "string"
+                  },
+                  "Type": {
+                    "title": "Type",
+                    "type": "string"
+                  },
+                  "Reference Role": {
+                    "title": "Reference Role",
+                    "type": "string"
+                  },
+                  "Further Detail": {
+                    "title": "Further Detail",
+                    "type": "string"
+                  },
+                  "Required Crop Standard": {
+                    "title": "Required Crop Standard",
+                    "type": "string"
+                  },
+                  "Record QC Status": {
+                    "title": "Record Qc Status",
+                    "type": "string"
+                  },
+                  "Record Action Needed": {
+                    "title": "Record Action Needed",
+                    "type": "string"
+                  },
+                  "Metadata Readiness": {
+                    "title": "Metadata Readiness",
+                    "type": "string"
+                  },
+                  "Confidence": {
+                    "title": "Confidence",
+                    "type": "string"
+                  },
+                  "Review Note": {
+                    "title": "Review Note",
+                    "type": "string"
+                  },
+                  "Production Task Count": {
+                    "title": "Production Task Count",
+                    "type": "string"
+                  },
+                  "Odyssey Ingest / Visibility Note": {
+                    "title": "Odyssey Ingest / Visibility Note",
+                    "type": "string"
+                  },
+                  "Notes": {
+                    "title": "Notes",
+                    "type": "string"
+                  },
+                  "Boundary State After Record": {
+                    "title": "Boundary State After Record",
+                    "type": "string"
+                  },
+                  "Inspection Complete": {
+                    "title": "Inspection Complete",
+                    "type": "string"
+                  },
+                  "Commit Status": {
+                    "title": "Commit Status",
+                    "type": "string"
+                  },
+                  "Commit Note": {
+                    "title": "Commit Note",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "Project",
+                  "Job ID",
+                  "Batch ID",
+                  "Processing Unit / Source Folder",
+                  "Record Sequence",
+                  "Proposed Record ID",
+                  "Record Kind",
+                  "Record Operation",
+                  "Box",
+                  "Source Group / Folder",
+                  "Parent Scrapbook",
+                  "Parent Scrapbook Page",
+                  "New Batch Assets",
+                  "Existing Committed Assets",
+                  "Full Record Assets After Commit",
+                  "Digital Asset Count",
+                  "Logical Component Count",
+                  "Template",
+                  "Type",
+                  "Reference Role",
+                  "Further Detail",
+                  "Required Crop Standard",
+                  "Record QC Status",
+                  "Record Action Needed",
+                  "Metadata Readiness",
+                  "Confidence",
+                  "Review Note",
+                  "Production Task Count",
+                  "Odyssey Ingest / Visibility Note",
+                  "Notes",
+                  "Boundary State After Record",
+                  "Inspection Complete",
+                  "Commit Status",
+                  "Commit Note"
+                ],
+                "title": "RecordRow",
+                "type": "object"
+              }
+            },
+            "additionalProperties": false,
+            "properties": {
+              "assets": {
+                "items": {
+                  "$ref": "#/$defs/AssetRow"
+                },
+                "title": "Assets",
+                "type": "array"
+              },
+              "records": {
+                "items": {
+                  "$ref": "#/$defs/RecordRow"
+                },
+                "title": "Records",
+                "type": "array"
+              }
+            },
+            "required": [
+              "assets",
+              "records"
+            ],
+            "title": "InspectionOutput",
+            "type": "object"
+          }
+        },
+        "max_output_tokens": 60000,
+        "reasoning": {
+          "effort": "high"
+        },
+        "prompt_cache_options": {
+          "mode": "explicit",
+          "ttl": "30m"
+        },
+        "prompt_cache_key": "hitcc-o-6976ee6a024872d005f699bcd3afd9390febbbc6",
+        "service_tier": "default",
+        "input_roles": [
+          "developer",
+          "user"
+        ]
+      },
+      "observation": {
+        "started_at": "2026-10-29T18:02:28.928080+00:00",
+        "completed_at": "2026-10-29T18:02:50.180791+00:00",
+        "response_id": "resp_0c16190a30c40967006ae38a3ac84087d1a541ee939afd78ea",
+        "service_tier": "default",
+        "usage": {
+          "input_tokens": 17199,
+          "input_tokens_details": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 12713,
+            "cache_write_tokens_details": {
+              "ttl_12h_tokens": 0,
+              "ttl_30m_tokens": 0
+            }
+          },
+          "output_tokens": 1096,
+          "output_tokens_details": {
+            "reasoning_tokens": 580
+          },
+          "total_tokens": 18295
+        },
+        "parsed_usage": {
+          "uncached_input_tokens": 4486,
+          "cached_input_tokens": 12713,
+          "cache_write_30m_tokens": 0,
+          "cache_write_12h_tokens": 0,
+          "cache_write_tokens": "",
+          "cache_write_retention": "none",
+          "output_tokens": 1096,
+          "input_tokens": 17199
+        },
+        "contamination": null,
+        "cache_state": "cache_read",
+        "application_estimate_usd": null,
+        "conservative_bound_usd": null,
+        "cost_known": false,
+        "cost_basis": "unknown",
+        "attempt": 1,
+        "status": "Received",
+        "failure_reason": null,
+        "billed": true,
+        "pricing_inputs": {
+          "label": "application_estimate_not_invoice_charge",
+          "basis": "OpenAI Standard rate card for gpt-5.6-sol short context (<=272k input), copied for this comparison only",
+          "currency": "USD",
+          "per_million_tokens": {
+            "uncached_input": "4",
+            "cached_input": "0.40",
+            "output": "20",
+            "cache_write_30m": "5",
+            "cache_write_12h": "10"
+          },
+          "unscoped_cache_write": "never_priced_as_application_estimate"
+        }
+      },
+      "quality": {
+        "pass": true,
+        "problems": [],
+        "extracted": {
+          "filename_count": 1,
+          "record_kind": "Normal Odyssey",
+          "template": "Document",
+          "action_needed": "Archival Border Crop",
+          "notes": "Excess black capture background surrounds the complete document page; remove only the excess background and retain a slight archival border. Apply an archival-border crop while preserving the complete physical sheet. Asset Open because the questionnaire text at the bottom continues beyond this page, providing visual evidence that the physical document has a following page."
+        }
+      }
+    },
+    {
+      "order": 3,
+      "arm": "optimized",
+      "warm_up": false,
+      "included_in_arm_total": true,
+      "source_filename": "TriDelta_Year2_Chapters_Box31_F04_Photograph_016b.jpg",
+      "governing_fingerprint": "a8c93ec4495ef726ced9f245b9cb3a262a5d1ed34658470b5bdf77ceebf9d693",
+      "run_id": "clean-20261029T180136Z-9781941e",
+      "prompt_cache_key": "hitcc-o-6976ee6a024872d005f699bcd3afd9390febbbc6",
+      "input_tokens": 17146,
+      "reservation_usd": "1.37146",
+      "service_tier_sent": "default",
+      "request": {
+        "model": "gpt-5.6-sol",
+        "text_format": {
+          "schema_name": "InspectionOutput",
+          "schema_module": "app.models",
+          "json_schema": {
+            "$defs": {
+              "AssetRow": {
+                "additionalProperties": false,
+                "properties": {
+                  "Project": {
+                    "title": "Project",
+                    "type": "string"
+                  },
+                  "Job ID": {
+                    "title": "Job Id",
+                    "type": "string"
+                  },
+                  "Batch ID": {
+                    "title": "Batch Id",
+                    "type": "string"
+                  },
+                  "Processing Unit / Source Folder": {
+                    "title": "Processing Unit / Source Folder",
+                    "type": "string"
+                  },
+                  "Asset Sequence": {
+                    "title": "Asset Sequence",
+                    "type": "string"
+                  },
+                  "Digital Asset": {
+                    "title": "Digital Asset",
+                    "type": "string"
+                  },
+                  "Box": {
+                    "title": "Box",
+                    "type": "string"
+                  },
+                  "Source Group / Folder": {
+                    "title": "Source Group / Folder",
+                    "type": "string"
+                  },
+                  "Assigned Record ID": {
+                    "title": "Assigned Record Id",
+                    "type": "string"
+                  },
+                  "Asset Role": {
+                    "title": "Asset Role",
+                    "type": "string"
+                  },
+                  "Required Crop Standard": {
+                    "title": "Required Crop Standard",
+                    "type": "string"
+                  },
+                  "QC Status": {
+                    "title": "Qc Status",
+                    "type": "string"
+                  },
+                  "Action Needed": {
+                    "title": "Action Needed",
+                    "type": "string"
+                  },
+                  "Expected Output Asset Count": {
+                    "title": "Expected Output Asset Count",
+                    "type": "string"
+                  },
+                  "QC Confidence": {
+                    "title": "Qc Confidence",
+                    "type": "string"
+                  },
+                  "QC Note": {
+                    "title": "Qc Note",
+                    "type": "string"
+                  },
+                  "Odyssey Ingest / Visibility Note": {
+                    "title": "Odyssey Ingest / Visibility Note",
+                    "type": "string"
+                  },
+                  "Production Queue Eligible": {
+                    "title": "Production Queue Eligible",
+                    "type": "string"
+                  },
+                  "Production Task Scope": {
+                    "title": "Production Task Scope",
+                    "type": "string"
+                  },
+                  "Production Task Note": {
+                    "title": "Production Task Note",
+                    "type": "string"
+                  },
+                  "Exception / Duplicate Note": {
+                    "title": "Exception / Duplicate Note",
+                    "type": "string"
+                  },
+                  "Inspection Complete": {
+                    "title": "Inspection Complete",
+                    "type": "string"
+                  },
+                  "Commit Status": {
+                    "title": "Commit Status",
+                    "type": "string"
+                  },
+                  "Commit Note": {
+                    "title": "Commit Note",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "Project",
+                  "Job ID",
+                  "Batch ID",
+                  "Processing Unit / Source Folder",
+                  "Asset Sequence",
+                  "Digital Asset",
+                  "Box",
+                  "Source Group / Folder",
+                  "Assigned Record ID",
+                  "Asset Role",
+                  "Required Crop Standard",
+                  "QC Status",
+                  "Action Needed",
+                  "Expected Output Asset Count",
+                  "QC Confidence",
+                  "QC Note",
+                  "Odyssey Ingest / Visibility Note",
+                  "Production Queue Eligible",
+                  "Production Task Scope",
+                  "Production Task Note",
+                  "Exception / Duplicate Note",
+                  "Inspection Complete",
+                  "Commit Status",
+                  "Commit Note"
+                ],
+                "title": "AssetRow",
+                "type": "object"
+              },
+              "RecordRow": {
+                "additionalProperties": false,
+                "properties": {
+                  "Project": {
+                    "title": "Project",
+                    "type": "string"
+                  },
+                  "Job ID": {
+                    "title": "Job Id",
+                    "type": "string"
+                  },
+                  "Batch ID": {
+                    "title": "Batch Id",
+                    "type": "string"
+                  },
+                  "Processing Unit / Source Folder": {
+                    "title": "Processing Unit / Source Folder",
+                    "type": "string"
+                  },
+                  "Record Sequence": {
+                    "title": "Record Sequence",
+                    "type": "string"
+                  },
+                  "Proposed Record ID": {
+                    "title": "Proposed Record Id",
+                    "type": "string"
+                  },
+                  "Record Kind": {
+                    "title": "Record Kind",
+                    "type": "string"
+                  },
+                  "Record Operation": {
+                    "title": "Record Operation",
+                    "type": "string"
+                  },
+                  "Box": {
+                    "title": "Box",
+                    "type": "string"
+                  },
+                  "Source Group / Folder": {
+                    "title": "Source Group / Folder",
+                    "type": "string"
+                  },
+                  "Parent Scrapbook": {
+                    "title": "Parent Scrapbook",
+                    "type": "string"
+                  },
+                  "Parent Scrapbook Page": {
+                    "title": "Parent Scrapbook Page",
+                    "type": "string"
+                  },
+                  "New Batch Assets": {
+                    "title": "New Batch Assets",
+                    "type": "string"
+                  },
+                  "Existing Committed Assets": {
+                    "title": "Existing Committed Assets",
+                    "type": "string"
+                  },
+                  "Full Record Assets After Commit": {
+                    "title": "Full Record Assets After Commit",
+                    "type": "string"
+                  },
+                  "Digital Asset Count": {
+                    "title": "Digital Asset Count",
+                    "type": "string"
+                  },
+                  "Logical Component Count": {
+                    "title": "Logical Component Count",
+                    "type": "string"
+                  },
+                  "Template": {
+                    "title": "Template",
+                    "type": "string"
+                  },
+                  "Type": {
+                    "title": "Type",
+                    "type": "string"
+                  },
+                  "Reference Role": {
+                    "title": "Reference Role",
+                    "type": "string"
+                  },
+                  "Further Detail": {
+                    "title": "Further Detail",
+                    "type": "string"
+                  },
+                  "Required Crop Standard": {
+                    "title": "Required Crop Standard",
+                    "type": "string"
+                  },
+                  "Record QC Status": {
+                    "title": "Record Qc Status",
+                    "type": "string"
+                  },
+                  "Record Action Needed": {
+                    "title": "Record Action Needed",
+                    "type": "string"
+                  },
+                  "Metadata Readiness": {
+                    "title": "Metadata Readiness",
+                    "type": "string"
+                  },
+                  "Confidence": {
+                    "title": "Confidence",
+                    "type": "string"
+                  },
+                  "Review Note": {
+                    "title": "Review Note",
+                    "type": "string"
+                  },
+                  "Production Task Count": {
+                    "title": "Production Task Count",
+                    "type": "string"
+                  },
+                  "Odyssey Ingest / Visibility Note": {
+                    "title": "Odyssey Ingest / Visibility Note",
+                    "type": "string"
+                  },
+                  "Notes": {
+                    "title": "Notes",
+                    "type": "string"
+                  },
+                  "Boundary State After Record": {
+                    "title": "Boundary State After Record",
+                    "type": "string"
+                  },
+                  "Inspection Complete": {
+                    "title": "Inspection Complete",
+                    "type": "string"
+                  },
+                  "Commit Status": {
+                    "title": "Commit Status",
+                    "type": "string"
+                  },
+                  "Commit Note": {
+                    "title": "Commit Note",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "Project",
+                  "Job ID",
+                  "Batch ID",
+                  "Processing Unit / Source Folder",
+                  "Record Sequence",
+                  "Proposed Record ID",
+                  "Record Kind",
+                  "Record Operation",
+                  "Box",
+                  "Source Group / Folder",
+                  "Parent Scrapbook",
+                  "Parent Scrapbook Page",
+                  "New Batch Assets",
+                  "Existing Committed Assets",
+                  "Full Record Assets After Commit",
+                  "Digital Asset Count",
+                  "Logical Component Count",
+                  "Template",
+                  "Type",
+                  "Reference Role",
+                  "Further Detail",
+                  "Required Crop Standard",
+                  "Record QC Status",
+                  "Record Action Needed",
+                  "Metadata Readiness",
+                  "Confidence",
+                  "Review Note",
+                  "Production Task Count",
+                  "Odyssey Ingest / Visibility Note",
+                  "Notes",
+                  "Boundary State After Record",
+                  "Inspection Complete",
+                  "Commit Status",
+                  "Commit Note"
+                ],
+                "title": "RecordRow",
+                "type": "object"
+              }
+            },
+            "additionalProperties": false,
+            "properties": {
+              "assets": {
+                "items": {
+                  "$ref": "#/$defs/AssetRow"
+                },
+                "title": "Assets",
+                "type": "array"
+              },
+              "records": {
+                "items": {
+                  "$ref": "#/$defs/RecordRow"
+                },
+                "title": "Records",
+                "type": "array"
+              }
+            },
+            "required": [
+              "assets",
+              "records"
+            ],
+            "title": "InspectionOutput",
+            "type": "object"
+          }
+        },
+        "max_output_tokens": 60000,
+        "reasoning": {
+          "effort": "high"
+        },
+        "prompt_cache_options": {
+          "mode": "explicit",
+          "ttl": "30m"
+        },
+        "prompt_cache_key": "hitcc-o-6976ee6a024872d005f699bcd3afd9390febbbc6",
+        "service_tier": "default",
+        "input_roles": [
+          "developer",
+          "user"
+        ]
+      },
+      "observation": {
+        "started_at": "2026-10-29T18:02:50.198759+00:00",
+        "completed_at": "2026-10-29T18:03:13.547077+00:00",
+        "response_id": "resp_0e432072b3307fb7006ae38a4ce55c87d1b68b55ad4ba6f85c",
+        "service_tier": "default",
+        "usage": {
+          "input_tokens": 17146,
+          "input_tokens_details": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 12713,
+            "cache_write_tokens_details": {
+              "ttl_12h_tokens": 0,
+              "ttl_30m_tokens": 0
+            }
+          },
+          "output_tokens": 1420,
+          "output_tokens_details": {
+            "reasoning_tokens": 900
+          },
+          "total_tokens": 18566
+        },
+        "parsed_usage": {
+          "uncached_input_tokens": 4433,
+          "cached_input_tokens": 12713,
+          "cache_write_30m_tokens": 0,
+          "cache_write_12h_tokens": 0,
+          "cache_write_tokens": "",
+          "cache_write_retention": "none",
+          "output_tokens": 1420,
+          "input_tokens": 17146
+        },
+        "contamination": null,
+        "cache_state": "cache_read",
+        "application_estimate_usd": null,
+        "conservative_bound_usd": null,
+        "cost_known": false,
+        "cost_basis": "unknown",
+        "attempt": 1,
+        "status": "Received",
+        "failure_reason": null,
+        "billed": true,
+        "pricing_inputs": {
+          "label": "application_estimate_not_invoice_charge",
+          "basis": "OpenAI Standard rate card for gpt-5.6-sol short context (<=272k input), copied for this comparison only",
+          "currency": "USD",
+          "per_million_tokens": {
+            "uncached_input": "4",
+            "cached_input": "0.40",
+            "output": "20",
+            "cache_write_30m": "5",
+            "cache_write_12h": "10"
+          },
+          "unscoped_cache_write": "never_priced_as_application_estimate"
+        }
+      },
+      "quality": {
+        "pass": true,
+        "problems": [],
+        "extracted": {
+          "filename_count": 1,
+          "record_kind": "Normal Odyssey",
+          "template": "Photographic Image",
+          "action_needed": "Rotate + Archival Border Crop",
+          "notes": "Photographic-print verso is mis-oriented by 180 degrees and has excess black capture background. Rotate 180 degrees, then remove excess background while retaining a slight archival border around the complete print. Rotate 180 degrees first, then apply Archival Border Crop without removing the physical edges of the photographic print. Asset The authorized image documents the verso of the photographic print."
+        }
+      }
+    },
+    {
+      "order": 4,
+      "arm": "baseline",
+      "warm_up": true,
+      "included_in_arm_total": true,
+      "source_filename": "TriDelta_Year2_Chapters_Box31_F04_004.jpg",
+      "governing_fingerprint": "a8c93ec4495ef726ced9f245b9cb3a262a5d1ed34658470b5bdf77ceebf9d693",
+      "run_id": "clean-20261029T180136Z-9781941e",
+      "prompt_cache_key": "hitcc-b-dcd56a9f2ee5dd59a0726a03688f4c7fa730f542",
+      "input_tokens": 17199,
+      "reservation_usd": "1.37199",
+      "service_tier_sent": "default",
+      "request": {
+        "model": "gpt-5.6-sol",
+        "text_format": {
+          "schema_name": "InspectionOutput",
+          "schema_module": "app.models",
+          "json_schema": {
+            "$defs": {
+              "AssetRow": {
+                "additionalProperties": false,
+                "properties": {
+                  "Project": {
+                    "title": "Project",
+                    "type": "string"
+                  },
+                  "Job ID": {
+                    "title": "Job Id",
+                    "type": "string"
+                  },
+                  "Batch ID": {
+                    "title": "Batch Id",
+                    "type": "string"
+                  },
+                  "Processing Unit / Source Folder": {
+                    "title": "Processing Unit / Source Folder",
+                    "type": "string"
+                  },
+                  "Asset Sequence": {
+                    "title": "Asset Sequence",
+                    "type": "string"
+                  },
+                  "Digital Asset": {
+                    "title": "Digital Asset",
+                    "type": "string"
+                  },
+                  "Box": {
+                    "title": "Box",
+                    "type": "string"
+                  },
+                  "Source Group / Folder": {
+                    "title": "Source Group / Folder",
+                    "type": "string"
+                  },
+                  "Assigned Record ID": {
+                    "title": "Assigned Record Id",
+                    "type": "string"
+                  },
+                  "Asset Role": {
+                    "title": "Asset Role",
+                    "type": "string"
+                  },
+                  "Required Crop Standard": {
+                    "title": "Required Crop Standard",
+                    "type": "string"
+                  },
+                  "QC Status": {
+                    "title": "Qc Status",
+                    "type": "string"
+                  },
+                  "Action Needed": {
+                    "title": "Action Needed",
+                    "type": "string"
+                  },
+                  "Expected Output Asset Count": {
+                    "title": "Expected Output Asset Count",
+                    "type": "string"
+                  },
+                  "QC Confidence": {
+                    "title": "Qc Confidence",
+                    "type": "string"
+                  },
+                  "QC Note": {
+                    "title": "Qc Note",
+                    "type": "string"
+                  },
+                  "Odyssey Ingest / Visibility Note": {
+                    "title": "Odyssey Ingest / Visibility Note",
+                    "type": "string"
+                  },
+                  "Production Queue Eligible": {
+                    "title": "Production Queue Eligible",
+                    "type": "string"
+                  },
+                  "Production Task Scope": {
+                    "title": "Production Task Scope",
+                    "type": "string"
+                  },
+                  "Production Task Note": {
+                    "title": "Production Task Note",
+                    "type": "string"
+                  },
+                  "Exception / Duplicate Note": {
+                    "title": "Exception / Duplicate Note",
+                    "type": "string"
+                  },
+                  "Inspection Complete": {
+                    "title": "Inspection Complete",
+                    "type": "string"
+                  },
+                  "Commit Status": {
+                    "title": "Commit Status",
+                    "type": "string"
+                  },
+                  "Commit Note": {
+                    "title": "Commit Note",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "Project",
+                  "Job ID",
+                  "Batch ID",
+                  "Processing Unit / Source Folder",
+                  "Asset Sequence",
+                  "Digital Asset",
+                  "Box",
+                  "Source Group / Folder",
+                  "Assigned Record ID",
+                  "Asset Role",
+                  "Required Crop Standard",
+                  "QC Status",
+                  "Action Needed",
+                  "Expected Output Asset Count",
+                  "QC Confidence",
+                  "QC Note",
+                  "Odyssey Ingest / Visibility Note",
+                  "Production Queue Eligible",
+                  "Production Task Scope",
+                  "Production Task Note",
+                  "Exception / Duplicate Note",
+                  "Inspection Complete",
+                  "Commit Status",
+                  "Commit Note"
+                ],
+                "title": "AssetRow",
+                "type": "object"
+              },
+              "RecordRow": {
+                "additionalProperties": false,
+                "properties": {
+                  "Project": {
+                    "title": "Project",
+                    "type": "string"
+                  },
+                  "Job ID": {
+                    "title": "Job Id",
+                    "type": "string"
+                  },
+                  "Batch ID": {
+                    "title": "Batch Id",
+                    "type": "string"
+                  },
+                  "Processing Unit / Source Folder": {
+                    "title": "Processing Unit / Source Folder",
+                    "type": "string"
+                  },
+                  "Record Sequence": {
+                    "title": "Record Sequence",
+                    "type": "string"
+                  },
+                  "Proposed Record ID": {
+                    "title": "Proposed Record Id",
+                    "type": "string"
+                  },
+                  "Record Kind": {
+                    "title": "Record Kind",
+                    "type": "string"
+                  },
+                  "Record Operation": {
+                    "title": "Record Operation",
+                    "type": "string"
+                  },
+                  "Box": {
+                    "title": "Box",
+                    "type": "string"
+                  },
+                  "Source Group / Folder": {
+                    "title": "Source Group / Folder",
+                    "type": "string"
+                  },
+                  "Parent Scrapbook": {
+                    "title": "Parent Scrapbook",
+                    "type": "string"
+                  },
+                  "Parent Scrapbook Page": {
+                    "title": "Parent Scrapbook Page",
+                    "type": "string"
+                  },
+                  "New Batch Assets": {
+                    "title": "New Batch Assets",
+                    "type": "string"
+                  },
+                  "Existing Committed Assets": {
+                    "title": "Existing Committed Assets",
+                    "type": "string"
+                  },
+                  "Full Record Assets After Commit": {
+                    "title": "Full Record Assets After Commit",
+                    "type": "string"
+                  },
+                  "Digital Asset Count": {
+                    "title": "Digital Asset Count",
+                    "type": "string"
+                  },
+                  "Logical Component Count": {
+                    "title": "Logical Component Count",
+                    "type": "string"
+                  },
+                  "Template": {
+                    "title": "Template",
+                    "type": "string"
+                  },
+                  "Type": {
+                    "title": "Type",
+                    "type": "string"
+                  },
+                  "Reference Role": {
+                    "title": "Reference Role",
+                    "type": "string"
+                  },
+                  "Further Detail": {
+                    "title": "Further Detail",
+                    "type": "string"
+                  },
+                  "Required Crop Standard": {
+                    "title": "Required Crop Standard",
+                    "type": "string"
+                  },
+                  "Record QC Status": {
+                    "title": "Record Qc Status",
+                    "type": "string"
+                  },
+                  "Record Action Needed": {
+                    "title": "Record Action Needed",
+                    "type": "string"
+                  },
+                  "Metadata Readiness": {
+                    "title": "Metadata Readiness",
+                    "type": "string"
+                  },
+                  "Confidence": {
+                    "title": "Confidence",
+                    "type": "string"
+                  },
+                  "Review Note": {
+                    "title": "Review Note",
+                    "type": "string"
+                  },
+                  "Production Task Count": {
+                    "title": "Production Task Count",
+                    "type": "string"
+                  },
+                  "Odyssey Ingest / Visibility Note": {
+                    "title": "Odyssey Ingest / Visibility Note",
+                    "type": "string"
+                  },
+                  "Notes": {
+                    "title": "Notes",
+                    "type": "string"
+                  },
+                  "Boundary State After Record": {
+                    "title": "Boundary State After Record",
+                    "type": "string"
+                  },
+                  "Inspection Complete": {
+                    "title": "Inspection Complete",
+                    "type": "string"
+                  },
+                  "Commit Status": {
+                    "title": "Commit Status",
+                    "type": "string"
+                  },
+                  "Commit Note": {
+                    "title": "Commit Note",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "Project",
+                  "Job ID",
+                  "Batch ID",
+                  "Processing Unit / Source Folder",
+                  "Record Sequence",
+                  "Proposed Record ID",
+                  "Record Kind",
+                  "Record Operation",
+                  "Box",
+                  "Source Group / Folder",
+                  "Parent Scrapbook",
+                  "Parent Scrapbook Page",
+                  "New Batch Assets",
+                  "Existing Committed Assets",
+                  "Full Record Assets After Commit",
+                  "Digital Asset Count",
+                  "Logical Component Count",
+                  "Template",
+                  "Type",
+                  "Reference Role",
+                  "Further Detail",
+                  "Required Crop Standard",
+                  "Record QC Status",
+                  "Record Action Needed",
+                  "Metadata Readiness",
+                  "Confidence",
+                  "Review Note",
+                  "Production Task Count",
+                  "Odyssey Ingest / Visibility Note",
+                  "Notes",
+                  "Boundary State After Record",
+                  "Inspection Complete",
+                  "Commit Status",
+                  "Commit Note"
+                ],
+                "title": "RecordRow",
+                "type": "object"
+              }
+            },
+            "additionalProperties": false,
+            "properties": {
+              "assets": {
+                "items": {
+                  "$ref": "#/$defs/AssetRow"
+                },
+                "title": "Assets",
+                "type": "array"
+              },
+              "records": {
+                "items": {
+                  "$ref": "#/$defs/RecordRow"
+                },
+                "title": "Records",
+                "type": "array"
+              }
+            },
+            "required": [
+              "assets",
+              "records"
+            ],
+            "title": "InspectionOutput",
+            "type": "object"
+          }
+        },
+        "max_output_tokens": 60000,
+        "reasoning": {
+          "effort": "high"
+        },
+        "prompt_cache_key": "hitcc-b-dcd56a9f2ee5dd59a0726a03688f4c7fa730f542",
+        "service_tier": "default",
+        "input_roles": [
+          "system",
+          "user"
+        ]
+      },
+      "observation": {
+        "started_at": "2026-10-29T18:03:13.584837+00:00",
+        "completed_at": "2026-10-29T18:03:34.899367+00:00",
+        "response_id": "resp_0450eb0a615af23d006ae38a6634d487d19ac5375e6ade5a0b",
+        "service_tier": "default",
+        "usage": {
+          "input_tokens": 17199,
+          "input_tokens_details": {
+            "cache_write_tokens": 17196,
+            "cached_tokens": 0
+          },
+          "output_tokens": 1379,
+          "output_tokens_details": {
+            "reasoning_tokens": 858
+          },
+          "total_tokens": 18578
+        },
+        "parsed_usage": {
+          "uncached_input_tokens": 3,
+          "cached_input_tokens": 0,
+          "cache_write_30m_tokens": "",
+          "cache_write_12h_tokens": "",
+          "cache_write_tokens": 17196,
+          "cache_write_retention": "unknown",
+          "output_tokens": 1379,
+          "input_tokens": 17199
+        },
+        "contamination": null,
+        "cache_state": "cache_write_or_miss",
+        "application_estimate_usd": null,
+        "conservative_bound_usd": "0.199552",
+        "cost_known": false,
+        "cost_basis": "unknown_unscoped_or_incomplete",
+        "attempt": 1,
+        "status": "Received",
+        "failure_reason": null,
+        "billed": true,
+        "pricing_inputs": {
+          "label": "application_estimate_not_invoice_charge",
+          "basis": "OpenAI Standard rate card for gpt-5.6-sol short context (<=272k input), copied for this comparison only",
+          "currency": "USD",
+          "per_million_tokens": {
+            "uncached_input": "4",
+            "cached_input": "0.40",
+            "output": "20",
+            "cache_write_30m": "5",
+            "cache_write_12h": "10"
+          },
+          "unscoped_cache_write": "never_priced_as_application_estimate"
+        }
+      },
+      "quality": {
+        "pass": true,
+        "problems": [],
+        "extracted": {
+          "filename_count": 1,
+          "record_kind": "Metadata Only",
+          "template": "Metadata Only",
+          "action_needed": "N/A",
+          "notes": "Typed descriptive reference sheet providing context for surrounding collection material; no production adjustment required. The visible punched, typed sheet is the front of the approved two-capture descriptive reference; only the front is authorized in this batch, so the record remains open for its associated blank verso. Do not associate this reference sheet with the separate Photograph_009 print record."
+        }
+      }
+    },
+    {
+      "order": 5,
+      "arm": "baseline",
+      "warm_up": false,
+      "included_in_arm_total": true,
+      "source_filename": "TriDelta_Year2_Chapters_Box31_F04_002.jpg",
+      "governing_fingerprint": "a8c93ec4495ef726ced9f245b9cb3a262a5d1ed34658470b5bdf77ceebf9d693",
+      "run_id": "clean-20261029T180136Z-9781941e",
+      "prompt_cache_key": "hitcc-b-dcd56a9f2ee5dd59a0726a03688f4c7fa730f542",
+      "input_tokens": 17199,
+      "reservation_usd": "1.37199",
+      "service_tier_sent": "default",
+      "request": {
+        "model": "gpt-5.6-sol",
+        "text_format": {
+          "schema_name": "InspectionOutput",
+          "schema_module": "app.models",
+          "json_schema": {
+            "$defs": {
+              "AssetRow": {
+                "additionalProperties": false,
+                "properties": {
+                  "Project": {
+                    "title": "Project",
+                    "type": "string"
+                  },
+                  "Job ID": {
+                    "title": "Job Id",
+                    "type": "string"
+                  },
+                  "Batch ID": {
+                    "title": "Batch Id",
+                    "type": "string"
+                  },
+                  "Processing Unit / Source Folder": {
+                    "title": "Processing Unit / Source Folder",
+                    "type": "string"
+                  },
+                  "Asset Sequence": {
+                    "title": "Asset Sequence",
+                    "type": "string"
+                  },
+                  "Digital Asset": {
+                    "title": "Digital Asset",
+                    "type": "string"
+                  },
+                  "Box": {
+                    "title": "Box",
+                    "type": "string"
+                  },
+                  "Source Group / Folder": {
+                    "title": "Source Group / Folder",
+                    "type": "string"
+                  },
+                  "Assigned Record ID": {
+                    "title": "Assigned Record Id",
+                    "type": "string"
+                  },
+                  "Asset Role": {
+                    "title": "Asset Role",
+                    "type": "string"
+                  },
+                  "Required Crop Standard": {
+                    "title": "Required Crop Standard",
+                    "type": "string"
+                  },
+                  "QC Status": {
+                    "title": "Qc Status",
+                    "type": "string"
+                  },
+                  "Action Needed": {
+                    "title": "Action Needed",
+                    "type": "string"
+                  },
+                  "Expected Output Asset Count": {
+                    "title": "Expected Output Asset Count",
+                    "type": "string"
+                  },
+                  "QC Confidence": {
+                    "title": "Qc Confidence",
+                    "type": "string"
+                  },
+                  "QC Note": {
+                    "title": "Qc Note",
+                    "type": "string"
+                  },
+                  "Odyssey Ingest / Visibility Note": {
+                    "title": "Odyssey Ingest / Visibility Note",
+                    "type": "string"
+                  },
+                  "Production Queue Eligible": {
+                    "title": "Production Queue Eligible",
+                    "type": "string"
+                  },
+                  "Production Task Scope": {
+                    "title": "Production Task Scope",
+                    "type": "string"
+                  },
+                  "Production Task Note": {
+                    "title": "Production Task Note",
+                    "type": "string"
+                  },
+                  "Exception / Duplicate Note": {
+                    "title": "Exception / Duplicate Note",
+                    "type": "string"
+                  },
+                  "Inspection Complete": {
+                    "title": "Inspection Complete",
+                    "type": "string"
+                  },
+                  "Commit Status": {
+                    "title": "Commit Status",
+                    "type": "string"
+                  },
+                  "Commit Note": {
+                    "title": "Commit Note",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "Project",
+                  "Job ID",
+                  "Batch ID",
+                  "Processing Unit / Source Folder",
+                  "Asset Sequence",
+                  "Digital Asset",
+                  "Box",
+                  "Source Group / Folder",
+                  "Assigned Record ID",
+                  "Asset Role",
+                  "Required Crop Standard",
+                  "QC Status",
+                  "Action Needed",
+                  "Expected Output Asset Count",
+                  "QC Confidence",
+                  "QC Note",
+                  "Odyssey Ingest / Visibility Note",
+                  "Production Queue Eligible",
+                  "Production Task Scope",
+                  "Production Task Note",
+                  "Exception / Duplicate Note",
+                  "Inspection Complete",
+                  "Commit Status",
+                  "Commit Note"
+                ],
+                "title": "AssetRow",
+                "type": "object"
+              },
+              "RecordRow": {
+                "additionalProperties": false,
+                "properties": {
+                  "Project": {
+                    "title": "Project",
+                    "type": "string"
+                  },
+                  "Job ID": {
+                    "title": "Job Id",
+                    "type": "string"
+                  },
+                  "Batch ID": {
+                    "title": "Batch Id",
+                    "type": "string"
+                  },
+                  "Processing Unit / Source Folder": {
+                    "title": "Processing Unit / Source Folder",
+                    "type": "string"
+                  },
+                  "Record Sequence": {
+                    "title": "Record Sequence",
+                    "type": "string"
+                  },
+                  "Proposed Record ID": {
+                    "title": "Proposed Record Id",
+                    "type": "string"
+                  },
+                  "Record Kind": {
+                    "title": "Record Kind",
+                    "type": "string"
+                  },
+                  "Record Operation": {
+                    "title": "Record Operation",
+                    "type": "string"
+                  },
+                  "Box": {
+                    "title": "Box",
+                    "type": "string"
+                  },
+                  "Source Group / Folder": {
+                    "title": "Source Group / Folder",
+                    "type": "string"
+                  },
+                  "Parent Scrapbook": {
+                    "title": "Parent Scrapbook",
+                    "type": "string"
+                  },
+                  "Parent Scrapbook Page": {
+                    "title": "Parent Scrapbook Page",
+                    "type": "string"
+                  },
+                  "New Batch Assets": {
+                    "title": "New Batch Assets",
+                    "type": "string"
+                  },
+                  "Existing Committed Assets": {
+                    "title": "Existing Committed Assets",
+                    "type": "string"
+                  },
+                  "Full Record Assets After Commit": {
+                    "title": "Full Record Assets After Commit",
+                    "type": "string"
+                  },
+                  "Digital Asset Count": {
+                    "title": "Digital Asset Count",
+                    "type": "string"
+                  },
+                  "Logical Component Count": {
+                    "title": "Logical Component Count",
+                    "type": "string"
+                  },
+                  "Template": {
+                    "title": "Template",
+                    "type": "string"
+                  },
+                  "Type": {
+                    "title": "Type",
+                    "type": "string"
+                  },
+                  "Reference Role": {
+                    "title": "Reference Role",
+                    "type": "string"
+                  },
+                  "Further Detail": {
+                    "title": "Further Detail",
+                    "type": "string"
+                  },
+                  "Required Crop Standard": {
+                    "title": "Required Crop Standard",
+                    "type": "string"
+                  },
+                  "Record QC Status": {
+                    "title": "Record Qc Status",
+                    "type": "string"
+                  },
+                  "Record Action Needed": {
+                    "title": "Record Action Needed",
+                    "type": "string"
+                  },
+                  "Metadata Readiness": {
+                    "title": "Metadata Readiness",
+                    "type": "string"
+                  },
+                  "Confidence": {
+                    "title": "Confidence",
+                    "type": "string"
+                  },
+                  "Review Note": {
+                    "title": "Review Note",
+                    "type": "string"
+                  },
+                  "Production Task Count": {
+                    "title": "Production Task Count",
+                    "type": "string"
+                  },
+                  "Odyssey Ingest / Visibility Note": {
+                    "title": "Odyssey Ingest / Visibility Note",
+                    "type": "string"
+                  },
+                  "Notes": {
+                    "title": "Notes",
+                    "type": "string"
+                  },
+                  "Boundary State After Record": {
+                    "title": "Boundary State After Record",
+                    "type": "string"
+                  },
+                  "Inspection Complete": {
+                    "title": "Inspection Complete",
+                    "type": "string"
+                  },
+                  "Commit Status": {
+                    "title": "Commit Status",
+                    "type": "string"
+                  },
+                  "Commit Note": {
+                    "title": "Commit Note",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "Project",
+                  "Job ID",
+                  "Batch ID",
+                  "Processing Unit / Source Folder",
+                  "Record Sequence",
+                  "Proposed Record ID",
+                  "Record Kind",
+                  "Record Operation",
+                  "Box",
+                  "Source Group / Folder",
+                  "Parent Scrapbook",
+                  "Parent Scrapbook Page",
+                  "New Batch Assets",
+                  "Existing Committed Assets",
+                  "Full Record Assets After Commit",
+                  "Digital Asset Count",
+                  "Logical Component Count",
+                  "Template",
+                  "Type",
+                  "Reference Role",
+                  "Further Detail",
+                  "Required Crop Standard",
+                  "Record QC Status",
+                  "Record Action Needed",
+                  "Metadata Readiness",
+                  "Confidence",
+                  "Review Note",
+                  "Production Task Count",
+                  "Odyssey Ingest / Visibility Note",
+                  "Notes",
+                  "Boundary State After Record",
+                  "Inspection Complete",
+                  "Commit Status",
+                  "Commit Note"
+                ],
+                "title": "RecordRow",
+                "type": "object"
+              }
+            },
+            "additionalProperties": false,
+            "properties": {
+              "assets": {
+                "items": {
+                  "$ref": "#/$defs/AssetRow"
+                },
+                "title": "Assets",
+                "type": "array"
+              },
+              "records": {
+                "items": {
+                  "$ref": "#/$defs/RecordRow"
+                },
+                "title": "Records",
+                "type": "array"
+              }
+            },
+            "required": [
+              "assets",
+              "records"
+            ],
+            "title": "InspectionOutput",
+            "type": "object"
+          }
+        },
+        "max_output_tokens": 60000,
+        "reasoning": {
+          "effort": "high"
+        },
+        "prompt_cache_key": "hitcc-b-dcd56a9f2ee5dd59a0726a03688f4c7fa730f542",
+        "service_tier": "default",
+        "input_roles": [
+          "system",
+          "user"
+        ]
+      },
+      "observation": {
+        "started_at": "2026-10-29T18:03:34.938208+00:00",
+        "completed_at": "2026-10-29T18:03:56.450246+00:00",
+        "response_id": "resp_0bf84bb0888b4377006ae38a7cebe487d1b8f06260442deb68",
+        "service_tier": "default",
+        "usage": {
+          "input_tokens": 17199,
+          "input_tokens_details": {
+            "cache_write_tokens": 4483,
+            "cached_tokens": 12713
+          },
+          "output_tokens": 1020,
+          "output_tokens_details": {
+            "reasoning_tokens": 516
+          },
+          "total_tokens": 18219
+        },
+        "parsed_usage": {
+          "uncached_input_tokens": 3,
+          "cached_input_tokens": 12713,
+          "cache_write_30m_tokens": "",
+          "cache_write_12h_tokens": "",
+          "cache_write_tokens": 4483,
+          "cache_write_retention": "unknown",
+          "output_tokens": 1020,
+          "input_tokens": 17199
+        },
+        "contamination": null,
+        "cache_state": "cache_read",
+        "application_estimate_usd": null,
+        "conservative_bound_usd": "0.0703272",
+        "cost_known": false,
+        "cost_basis": "unknown_unscoped_or_incomplete",
+        "attempt": 1,
+        "status": "Received",
+        "failure_reason": null,
+        "billed": true,
+        "pricing_inputs": {
+          "label": "application_estimate_not_invoice_charge",
+          "basis": "OpenAI Standard rate card for gpt-5.6-sol short context (<=272k input), copied for this comparison only",
+          "currency": "USD",
+          "per_million_tokens": {
+            "uncached_input": "4",
+            "cached_input": "0.40",
+            "output": "20",
+            "cache_write_30m": "5",
+            "cache_write_12h": "10"
+          },
+          "unscoped_cache_write": "never_priced_as_application_estimate"
+        }
+      },
+      "quality": {
+        "pass": true,
+        "problems": [],
+        "extracted": {
+          "filename_count": 1,
+          "record_kind": "Normal Odyssey",
+          "template": "Document",
+          "action_needed": "Archival Border Crop",
+          "notes": "Excess black capture background surrounds the document; preserve the complete sheet while reducing the background to a slight archival border. Apply Archival Border Crop without removing document content. Asset Open: the questionnaire continues beyond the text visible at the bottom of this page, supporting continuation onto a subsequent page of the same physical document."
+        }
+      }
+    },
+    {
+      "order": 6,
+      "arm": "baseline",
+      "warm_up": false,
+      "included_in_arm_total": true,
+      "source_filename": "TriDelta_Year2_Chapters_Box31_F04_Photograph_016b.jpg",
+      "governing_fingerprint": "a8c93ec4495ef726ced9f245b9cb3a262a5d1ed34658470b5bdf77ceebf9d693",
+      "run_id": "clean-20261029T180136Z-9781941e",
+      "prompt_cache_key": "hitcc-b-dcd56a9f2ee5dd59a0726a03688f4c7fa730f542",
+      "input_tokens": 17146,
+      "reservation_usd": "1.37146",
+      "service_tier_sent": "default",
+      "request": {
+        "model": "gpt-5.6-sol",
+        "text_format": {
+          "schema_name": "InspectionOutput",
+          "schema_module": "app.models",
+          "json_schema": {
+            "$defs": {
+              "AssetRow": {
+                "additionalProperties": false,
+                "properties": {
+                  "Project": {
+                    "title": "Project",
+                    "type": "string"
+                  },
+                  "Job ID": {
+                    "title": "Job Id",
+                    "type": "string"
+                  },
+                  "Batch ID": {
+                    "title": "Batch Id",
+                    "type": "string"
+                  },
+                  "Processing Unit / Source Folder": {
+                    "title": "Processing Unit / Source Folder",
+                    "type": "string"
+                  },
+                  "Asset Sequence": {
+                    "title": "Asset Sequence",
+                    "type": "string"
+                  },
+                  "Digital Asset": {
+                    "title": "Digital Asset",
+                    "type": "string"
+                  },
+                  "Box": {
+                    "title": "Box",
+                    "type": "string"
+                  },
+                  "Source Group / Folder": {
+                    "title": "Source Group / Folder",
+                    "type": "string"
+                  },
+                  "Assigned Record ID": {
+                    "title": "Assigned Record Id",
+                    "type": "string"
+                  },
+                  "Asset Role": {
+                    "title": "Asset Role",
+                    "type": "string"
+                  },
+                  "Required Crop Standard": {
+                    "title": "Required Crop Standard",
+                    "type": "string"
+                  },
+                  "QC Status": {
+                    "title": "Qc Status",
+                    "type": "string"
+                  },
+                  "Action Needed": {
+                    "title": "Action Needed",
+                    "type": "string"
+                  },
+                  "Expected Output Asset Count": {
+                    "title": "Expected Output Asset Count",
+                    "type": "string"
+                  },
+                  "QC Confidence": {
+                    "title": "Qc Confidence",
+                    "type": "string"
+                  },
+                  "QC Note": {
+                    "title": "Qc Note",
+                    "type": "string"
+                  },
+                  "Odyssey Ingest / Visibility Note": {
+                    "title": "Odyssey Ingest / Visibility Note",
+                    "type": "string"
+                  },
+                  "Production Queue Eligible": {
+                    "title": "Production Queue Eligible",
+                    "type": "string"
+                  },
+                  "Production Task Scope": {
+                    "title": "Production Task Scope",
+                    "type": "string"
+                  },
+                  "Production Task Note": {
+                    "title": "Production Task Note",
+                    "type": "string"
+                  },
+                  "Exception / Duplicate Note": {
+                    "title": "Exception / Duplicate Note",
+                    "type": "string"
+                  },
+                  "Inspection Complete": {
+                    "title": "Inspection Complete",
+                    "type": "string"
+                  },
+                  "Commit Status": {
+                    "title": "Commit Status",
+                    "type": "string"
+                  },
+                  "Commit Note": {
+                    "title": "Commit Note",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "Project",
+                  "Job ID",
+                  "Batch ID",
+                  "Processing Unit / Source Folder",
+                  "Asset Sequence",
+                  "Digital Asset",
+                  "Box",
+                  "Source Group / Folder",
+                  "Assigned Record ID",
+                  "Asset Role",
+                  "Required Crop Standard",
+                  "QC Status",
+                  "Action Needed",
+                  "Expected Output Asset Count",
+                  "QC Confidence",
+                  "QC Note",
+                  "Odyssey Ingest / Visibility Note",
+                  "Production Queue Eligible",
+                  "Production Task Scope",
+                  "Production Task Note",
+                  "Exception / Duplicate Note",
+                  "Inspection Complete",
+                  "Commit Status",
+                  "Commit Note"
+                ],
+                "title": "AssetRow",
+                "type": "object"
+              },
+              "RecordRow": {
+                "additionalProperties": false,
+                "properties": {
+                  "Project": {
+                    "title": "Project",
+                    "type": "string"
+                  },
+                  "Job ID": {
+                    "title": "Job Id",
+                    "type": "string"
+                  },
+                  "Batch ID": {
+                    "title": "Batch Id",
+                    "type": "string"
+                  },
+                  "Processing Unit / Source Folder": {
+                    "title": "Processing Unit / Source Folder",
+                    "type": "string"
+                  },
+                  "Record Sequence": {
+                    "title": "Record Sequence",
+                    "type": "string"
+                  },
+                  "Proposed Record ID": {
+                    "title": "Proposed Record Id",
+                    "type": "string"
+                  },
+                  "Record Kind": {
+                    "title": "Record Kind",
+                    "type": "string"
+                  },
+                  "Record Operation": {
+                    "title": "Record Operation",
+                    "type": "string"
+                  },
+                  "Box": {
+                    "title": "Box",
+                    "type": "string"
+                  },
+                  "Source Group / Folder": {
+                    "title": "Source Group / Folder",
+                    "type": "string"
+                  },
+                  "Parent Scrapbook": {
+                    "title": "Parent Scrapbook",
+                    "type": "string"
+                  },
+                  "Parent Scrapbook Page": {
+                    "title": "Parent Scrapbook Page",
+                    "type": "string"
+                  },
+                  "New Batch Assets": {
+                    "title": "New Batch Assets",
+                    "type": "string"
+                  },
+                  "Existing Committed Assets": {
+                    "title": "Existing Committed Assets",
+                    "type": "string"
+                  },
+                  "Full Record Assets After Commit": {
+                    "title": "Full Record Assets After Commit",
+                    "type": "string"
+                  },
+                  "Digital Asset Count": {
+                    "title": "Digital Asset Count",
+                    "type": "string"
+                  },
+                  "Logical Component Count": {
+                    "title": "Logical Component Count",
+                    "type": "string"
+                  },
+                  "Template": {
+                    "title": "Template",
+                    "type": "string"
+                  },
+                  "Type": {
+                    "title": "Type",
+                    "type": "string"
+                  },
+                  "Reference Role": {
+                    "title": "Reference Role",
+                    "type": "string"
+                  },
+                  "Further Detail": {
+                    "title": "Further Detail",
+                    "type": "string"
+                  },
+                  "Required Crop Standard": {
+                    "title": "Required Crop Standard",
+                    "type": "string"
+                  },
+                  "Record QC Status": {
+                    "title": "Record Qc Status",
+                    "type": "string"
+                  },
+                  "Record Action Needed": {
+                    "title": "Record Action Needed",
+                    "type": "string"
+                  },
+                  "Metadata Readiness": {
+                    "title": "Metadata Readiness",
+                    "type": "string"
+                  },
+                  "Confidence": {
+                    "title": "Confidence",
+                    "type": "string"
+                  },
+                  "Review Note": {
+                    "title": "Review Note",
+                    "type": "string"
+                  },
+                  "Production Task Count": {
+                    "title": "Production Task Count",
+                    "type": "string"
+                  },
+                  "Odyssey Ingest / Visibility Note": {
+                    "title": "Odyssey Ingest / Visibility Note",
+                    "type": "string"
+                  },
+                  "Notes": {
+                    "title": "Notes",
+                    "type": "string"
+                  },
+                  "Boundary State After Record": {
+                    "title": "Boundary State After Record",
+                    "type": "string"
+                  },
+                  "Inspection Complete": {
+                    "title": "Inspection Complete",
+                    "type": "string"
+                  },
+                  "Commit Status": {
+                    "title": "Commit Status",
+                    "type": "string"
+                  },
+                  "Commit Note": {
+                    "title": "Commit Note",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "Project",
+                  "Job ID",
+                  "Batch ID",
+                  "Processing Unit / Source Folder",
+                  "Record Sequence",
+                  "Proposed Record ID",
+                  "Record Kind",
+                  "Record Operation",
+                  "Box",
+                  "Source Group / Folder",
+                  "Parent Scrapbook",
+                  "Parent Scrapbook Page",
+                  "New Batch Assets",
+                  "Existing Committed Assets",
+                  "Full Record Assets After Commit",
+                  "Digital Asset Count",
+                  "Logical Component Count",
+                  "Template",
+                  "Type",
+                  "Reference Role",
+                  "Further Detail",
+                  "Required Crop Standard",
+                  "Record QC Status",
+                  "Record Action Needed",
+                  "Metadata Readiness",
+                  "Confidence",
+                  "Review Note",
+                  "Production Task Count",
+                  "Odyssey Ingest / Visibility Note",
+                  "Notes",
+                  "Boundary State After Record",
+                  "Inspection Complete",
+                  "Commit Status",
+                  "Commit Note"
+                ],
+                "title": "RecordRow",
+                "type": "object"
+              }
+            },
+            "additionalProperties": false,
+            "properties": {
+              "assets": {
+                "items": {
+                  "$ref": "#/$defs/AssetRow"
+                },
+                "title": "Assets",
+                "type": "array"
+              },
+              "records": {
+                "items": {
+                  "$ref": "#/$defs/RecordRow"
+                },
+                "title": "Records",
+                "type": "array"
+              }
+            },
+            "required": [
+              "assets",
+              "records"
+            ],
+            "title": "InspectionOutput",
+            "type": "object"
+          }
+        },
+        "max_output_tokens": 60000,
+        "reasoning": {
+          "effort": "high"
+        },
+        "prompt_cache_key": "hitcc-b-dcd56a9f2ee5dd59a0726a03688f4c7fa730f542",
+        "service_tier": "default",
+        "input_roles": [
+          "system",
+          "user"
+        ]
+      },
+      "observation": {
+        "started_at": "2026-10-29T18:03:56.487202+00:00",
+        "completed_at": "2026-10-29T18:04:19.995567+00:00",
+        "response_id": "resp_01476841db267387006ae38a8f3fcc87d192ad9e388e5dfdcd",
+        "service_tier": "default",
+        "usage": {
+          "input_tokens": 17146,
+          "input_tokens_details": {
+            "cache_write_tokens": 4430,
+            "cached_tokens": 12713
+          },
+          "output_tokens": 1494,
+          "output_tokens_details": {
+            "reasoning_tokens": 976
+          },
+          "total_tokens": 18640
+        },
+        "parsed_usage": {
+          "uncached_input_tokens": 3,
+          "cached_input_tokens": 12713,
+          "cache_write_30m_tokens": "",
+          "cache_write_12h_tokens": "",
+          "cache_write_tokens": 4430,
+          "cache_write_retention": "unknown",
+          "output_tokens": 1494,
+          "input_tokens": 17146
+        },
+        "contamination": null,
+        "cache_state": "cache_read",
+        "application_estimate_usd": null,
+        "conservative_bound_usd": "0.0792772",
+        "cost_known": false,
+        "cost_basis": "unknown_unscoped_or_incomplete",
+        "attempt": 1,
+        "status": "Received",
+        "failure_reason": null,
+        "billed": true,
+        "pricing_inputs": {
+          "label": "application_estimate_not_invoice_charge",
+          "basis": "OpenAI Standard rate card for gpt-5.6-sol short context (<=272k input), copied for this comparison only",
+          "currency": "USD",
+          "per_million_tokens": {
+            "uncached_input": "4",
+            "cached_input": "0.40",
+            "output": "20",
+            "cache_write_30m": "5",
+            "cache_write_12h": "10"
+          },
+          "unscoped_cache_write": "never_priced_as_application_estimate"
+        }
+      },
+      "quality": {
+        "pass": true,
+        "problems": [],
+        "extracted": {
+          "filename_count": 1,
+          "record_kind": "Normal Odyssey",
+          "template": "Photographic Image",
+          "action_needed": "Rotate + Archival Border Crop",
+          "notes": "Photographic print verso is rotated 180 degrees and surrounded by excess black capture background. Rotate 180 degrees, then apply Archival Border Crop to remove excess capture background while preserving the complete photographic print. Asset The authorized capture depicts the verso of a photographic print."
+        }
+      }
+    }
+  ],
+  "reserved_usd": "8.23088",
+  "optimized": {
+    "application_estimate_usd": null,
+    "conservative_bound_usd": null
+  },
+  "baseline": {
+    "application_estimate_usd": null,
+    "conservative_bound_usd": "0.3491564"
+  },
+  "savings": "inconclusive",
+  "acceptance": {
+    "result": "inconclusive",
+    "acceptance_rule": "Pass only when all three quality outcomes pass in both arms; baseline and optimized warm-ups are uncontaminated; optimized follow-ups show cache reads; optimized total application-estimate cost is lower than baseline; and that difference is larger than documented uncertainty (overlapping estimate/bound ranges or any unknown estimate). Otherwise the result is inconclusive.",
+    "quality_pass_both_arms": true,
+    "warm_ups_uncontaminated": true,
+    "optimized_follow_ups_show_cache_reads": true,
+    "optimized_estimate_lower_beyond_uncertainty": false,
+    "reasons": [
+      "cost difference is unknown or within documented uncertainty"
+    ],
+    "failed_26_oct_reused": false,
+    "prior_contaminated_run_reused": false
+  },
+  "regressions": [],
+  "events_path": "D:\\Integer\\HistoryIT\\history-it\\server\\harness\\reports\\clean-runs\\clean-20261029T180136Z-9781941e\\cache_comparison_events.jsonl",
+  "warm_up_contamination": [
+    {
+      "arm": "optimized",
+      "contamination": null,
+      "service_tier": "default",
+      "cache_state": "cache_write_or_miss",
+      "prompt_cache_key": "hitcc-o-6976ee6a024872d005f699bcd3afd9390febbbc6"
+    },
+    {
+      "arm": "baseline",
+      "contamination": null,
+      "service_tier": "default",
+      "cache_state": "cache_write_or_miss",
+      "prompt_cache_key": "hitcc-b-dcd56a9f2ee5dd59a0726a03688f4c7fa730f542"
+    }
+  ]
+}
