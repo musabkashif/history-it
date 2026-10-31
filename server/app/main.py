@@ -145,6 +145,10 @@ class AdminPasswordResetRequest(BaseModel):
 class AdminActiveRequest(BaseModel):
  active: bool
 
+class MembershipGrantRequest(BaseModel):
+ user_id: str = Field(min_length=1, max_length=80)
+ workspace_id: str = Field(min_length=1, max_length=120)
+
 def _require_loopback(request: Request) -> None:
  """Host deploy probe only. Nginx does not publish this path.
 
@@ -241,6 +245,26 @@ def reset_admin_password(user_id: str, req: AdminPasswordResetRequest, request: 
 def set_admin_active(user_id: str, req: AdminActiveRequest, request: Request, x_api_token: str | None = Header(default=None)):
  principal = guard(request, x_api_token, mutating=True)
  return get_accounts().set_active(principal, user_id, req.active)
+
+@app.get('/api/auth/account')
+def current_account(request: Request, x_api_token: str | None = Header(default=None)):
+ principal = guard(request, x_api_token)
+ return get_accounts().public_account(principal)
+
+@app.get('/api/auth/memberships')
+def list_memberships(request: Request, workspace_id: str | None = None, x_api_token: str | None = Header(default=None)):
+ principal = guard(request, x_api_token)
+ return {'memberships': get_accounts().list_memberships_for_actor(principal, workspace_id=workspace_id)}
+
+@app.post('/api/auth/memberships')
+def grant_membership(req: MembershipGrantRequest, request: Request, x_api_token: str | None = Header(default=None)):
+ principal = guard(request, x_api_token, mutating=True)
+ return get_accounts().grant_membership(principal, user_id=req.user_id, workspace_id=req.workspace_id)
+
+@app.delete('/api/auth/memberships/{user_id}/{workspace_id}')
+def revoke_membership(user_id: str, workspace_id: str, request: Request, x_api_token: str | None = Header(default=None)):
+ principal = guard(request, x_api_token, mutating=True)
+ return get_accounts().revoke_membership(principal, user_id=user_id, workspace_id=workspace_id)
 
 def hmac_compare(expected: str, provided: str) -> bool:
  import hmac as _hmac

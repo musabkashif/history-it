@@ -14,6 +14,7 @@ import { JobsPage } from './pages/Jobs'
 import { ControlJobPage } from './pages/ControlJob'
 import { BenchmarkPage } from './pages/Benchmark'
 import { SettingsPage } from './pages/Settings'
+import { AccountPage } from './pages/Account'
 import { LoginPage } from './pages/Login'
 import './index.css'
 
@@ -351,7 +352,9 @@ function App() {
                 />
               : view === 'control-job'
                 ? <ControlJobPage jobId={controlJobId} workspaceId={controlWorkspace} onOpenSheets={openJob} onBack={() => setView('jobs')} />
-                : <SettingsPage />
+                : view === 'account'
+                  ? <AccountPage />
+                  : <SettingsPage />
 
   return (
     <AppShell

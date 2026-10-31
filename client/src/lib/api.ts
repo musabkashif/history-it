@@ -77,12 +77,72 @@ export type SessionResponse = {
   role?: string
 }
 
+export type AdminRecord = {
+  user_id: string
+  username: string
+  display_name: string
+  role: string
+  active: boolean
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type AccountResponse = AdminRecord & {
+  session?: {
+    user_id?: string
+    username?: string
+    display_name?: string
+    role?: string
+  }
+}
+
+export type MembershipRecord = {
+  user_id: string
+  workspace_id: string
+  role: string
+  created_at?: string | null
+  username?: string | null
+  display_name?: string | null
+}
+
 export const api = {
   health: () => request<Health>('/health'),
   login: (username: string, password: string) => request<SessionResponse>('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   session: () => request<SessionResponse>('/api/auth/session'),
   logout: () => request<SessionResponse>('/api/auth/logout', { method: 'POST' }),
-  changePassword: (current_password: string, new_password: string) => request<{ user_id: string; username: string }>('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password, new_password }) }),
+  account: () => request<AccountResponse>('/api/auth/account'),
+  listAdmins: () => request<{ admins: AdminRecord[] }>('/api/auth/admins'),
+  createAdmin: (body: { username: string; password: string; display_name?: string }) =>
+    request<AdminRecord>('/api/auth/admins', { method: 'POST', body: JSON.stringify(body) }),
+  resetAdminPassword: (userId: string, new_password: string) =>
+    request<AdminRecord>(`/api/auth/admins/${encodeURIComponent(userId)}/reset-password`, {
+      method: 'POST',
+      body: JSON.stringify({ new_password }),
+    }),
+  setAdminActive: (userId: string, active: boolean) =>
+    request<AdminRecord>(`/api/auth/admins/${encodeURIComponent(userId)}/active`, {
+      method: 'POST',
+      body: JSON.stringify({ active }),
+    }),
+  listMemberships: (workspaceId?: string) =>
+    request<{ memberships: MembershipRecord[] }>(
+      `/api/auth/memberships${workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : ''}`,
+    ),
+  grantMembership: (user_id: string, workspace_id: string) =>
+    request<MembershipRecord>('/api/auth/memberships', {
+      method: 'POST',
+      body: JSON.stringify({ user_id, workspace_id }),
+    }),
+  revokeMembership: (userId: string, workspaceId: string) =>
+    request<{ removed: boolean; user_id: string; workspace_id: string }>(
+      `/api/auth/memberships/${encodeURIComponent(userId)}/${encodeURIComponent(workspaceId)}`,
+      { method: 'DELETE' },
+    ),
+  changePassword: (current_password: string, new_password: string) =>
+    request<AdminRecord>('/api/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password, new_password }),
+    }),
   createJob: (body: JobForm) => request<JobState>('/api/jobs', { method: 'POST', body: JSON.stringify({ ...body, batch_size: body.batch_size || undefined }) }),
   getJob: (id: string) => request<JobState>(`/api/jobs/${encodeURIComponent(id)}`),
   getBatches: (id: string) => request<BatchesResponse>(`/api/jobs/${encodeURIComponent(id)}/batches`),

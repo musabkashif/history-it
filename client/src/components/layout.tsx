@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react'
 import { useState } from 'react'
-import { BookOpen, ChevronRight, FileCheck2, Folders, LayoutDashboard, LogOut, Menu, PlayCircle, X } from 'lucide-react'
+import { BookOpen, ChevronRight, FileCheck2, Folders, LayoutDashboard, LogOut, Menu, PlayCircle, Shield, X } from 'lucide-react'
 import { Alert, Button } from './ui'
 
-export type View = 'overview'|'new-job'|'job'|'benchmark'|'settings'|'projects'|'jobs'|'control-job'
+export type View = 'overview'|'new-job'|'job'|'benchmark'|'settings'|'account'|'projects'|'jobs'|'control-job'
 
 function OdysseyMark({ compact = false }: { compact?: boolean }) {
   // Primary mark matching the logo usage guide (broken ring around O + wordmark).
@@ -65,6 +65,7 @@ export function AppShell({
     ...(developerVerification
       ? [{ id: 'benchmark' as const, label: 'Developer: Box 19 verify', icon: FileCheck2 }]
       : []),
+    { id: 'account' as const, label: 'Account', icon: Shield },
     { id: 'settings' as const, label: 'Guide', icon: BookOpen },
   ]
   return (

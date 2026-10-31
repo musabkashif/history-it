@@ -36,6 +36,18 @@ class PublicAdmin(BaseModel):
     display_name: str
     active: bool
     role: AdminRole = ROLE_ADMIN
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class PublicMembership(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    user_id: str
+    workspace_id: str
+    role: AdminRole = ROLE_ADMIN
+    created_at: str | None = None
+    username: str | None = None
+    display_name: str | None = None
 
 
 def public_admin(doc: dict) -> dict:
@@ -45,4 +57,18 @@ def public_admin(doc: dict) -> dict:
         display_name=doc.get('display_name') or doc['username'],
         active=bool(doc.get('active', True)),
         role=ROLE_ADMIN,
+        created_at=doc.get('created_at'),
+        updated_at=doc.get('updated_at'),
     ).model_dump()
+
+
+def public_membership(doc: dict, *, user: dict | None = None) -> dict:
+    payload = PublicMembership(
+        user_id=doc['user_id'],
+        workspace_id=doc['workspace_id'],
+        role=ROLE_ADMIN,
+        created_at=doc.get('created_at'),
+        username=(user or {}).get('username'),
+        display_name=(user or {}).get('display_name') or (user or {}).get('username'),
+    ).model_dump()
+    return payload

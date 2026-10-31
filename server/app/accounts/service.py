@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 
 from app.accounts.access import AuthPrincipal, deny_membership, require_admin, stamp_actor
-from app.accounts.models import ROLE_ADMIN, public_admin
+from app.accounts.models import ROLE_ADMIN, public_admin, public_membership
 from app.accounts.store import get_accounts_store
 from app import auth
 
@@ -163,8 +163,15 @@ class AccountsService:
         target = self.store.get_user(target_user_id)
         if target is None:
             raise HTTPException(404, 'Admin account was not found.')
-        if not active and actor.user_id and actor.user_id == target_user_id:
-            raise HTTPException(409, 'You cannot disable your own Admin account while signed in.')
+        if not active:
+            remaining = [
+                row for row in self.store.list_users()
+                if row.get('active', True) and row.get('user_id') != target_user_id
+            ]
+            if not remaining:
+                raise HTTPException(409, 'Cannot disable the last active Admin.')
+            if actor.user_id and actor.user_id == target_user_id:
+                raise HTTPException(409, 'You cannot disable your own Admin account while signed in.')
         target['active'] = bool(active)
         target['updated_at'] = _now()
         return public_admin(self.store.upsert_user(target))
@@ -233,6 +240,78 @@ class AccountsService:
 
     def member_workspace_ids(self, user_id: str) -> set[str]:
         return {row['workspace_id'] for row in self.store.list_memberships(user_id=user_id)}
+
+    def list_memberships_for_actor(
+        self,
+        principal: AuthPrincipal,
+        *,
+        workspace_id: str | None = None,
+    ) -> list[dict]:
+        require_admin(principal)
+        if principal.is_service:
+            rows = self.store.list_memberships(workspace_id=workspace_id)
+        else:
+            allowed = self.member_workspace_ids(principal.user_id or '')
+            if workspace_id:
+                if workspace_id not in allowed:
+                    deny_membership()
+                rows = self.store.list_memberships(workspace_id=workspace_id)
+            else:
+                rows = [
+                    row for wid in sorted(allowed)
+                    for row in self.store.list_memberships(workspace_id=wid)
+                ]
+        users = {row['user_id']: row for row in self.store.list_users()}
+        return [public_membership(row, user=users.get(row['user_id'])) for row in rows]
+
+    def grant_membership(self, actor: AuthPrincipal, *, user_id: str, workspace_id: str) -> dict:
+        require_admin(actor)
+        workspace_id = (workspace_id or '').strip()
+        user_id = (user_id or '').strip()
+        if not workspace_id or not user_id:
+            raise HTTPException(400, 'user_id and workspace_id are required.')
+        if not actor.is_service:
+            self.assert_member(actor, workspace_id)
+        target = self.store.get_user(user_id)
+        if target is None:
+            raise HTTPException(404, 'Admin account was not found.')
+        if target.get('role') != ROLE_ADMIN:
+            raise HTTPException(400, 'Only Admin accounts can receive workspace membership.')
+        member = self.ensure_membership(user_id, workspace_id)
+        return public_membership(member, user=target)
+
+    def revoke_membership(self, actor: AuthPrincipal, *, user_id: str, workspace_id: str) -> dict:
+        require_admin(actor)
+        workspace_id = (workspace_id or '').strip()
+        user_id = (user_id or '').strip()
+        if not workspace_id or not user_id:
+            raise HTTPException(400, 'user_id and workspace_id are required.')
+        if not actor.is_service:
+            self.assert_member(actor, workspace_id)
+        existing = self.store.get_membership(user_id, workspace_id)
+        if existing is None:
+            raise HTTPException(404, 'Membership was not found.')
+        members = self.store.list_memberships(workspace_id=workspace_id)
+        if len(members) <= 1:
+            raise HTTPException(409, 'Cannot remove the last Admin from this workspace.')
+        self.store.delete_membership(user_id, workspace_id)
+        return {'removed': True, 'user_id': user_id, 'workspace_id': workspace_id}
+
+    def public_account(self, principal: AuthPrincipal) -> dict:
+        require_admin(principal)
+        if principal.is_service or not principal.user_id:
+            raise HTTPException(403, 'Admin access required.')
+        user = self.store.get_user(principal.user_id)
+        if user is None:
+            raise HTTPException(404, 'Admin account was not found.')
+        payload = public_admin(user)
+        payload['session'] = {
+            'user_id': principal.user_id,
+            'username': principal.username,
+            'display_name': principal.display_name or principal.username,
+            'role': ROLE_ADMIN,
+        }
+        return payload
 
     def _validate_password(self, password: str) -> None:
         if not password or len(password) < 10:
